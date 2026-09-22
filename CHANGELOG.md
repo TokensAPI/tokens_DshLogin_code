@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.1.1
+
+- The gate's fallback link now reads "Use an API key for this session"
+  (改用 API Key 临时登录). Entering a key admits you once; the gate judges
+  the account session, so it returns on the next start. The key itself is
+  kept — downstream plugins are unaffected.
+- Release workflow: tagging `v*` verifies the package identity, runs the
+  tests and publishes to the private registry.
+
 ## 0.1.0
 
 First release.
