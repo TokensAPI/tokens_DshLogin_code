@@ -53,7 +53,7 @@ const runtimes = new WeakMap()
 function loginRuntime(ctx) {
   let runtime = runtimes.get(ctx)
   if (!runtime) {
-    runtime = { desktopRuntime: null, user: null, loginInFlight: null, loginTarget: '' }
+    runtime = { desktopRuntime: null, user: null, loginInFlight: null, loginTarget: '', sessionCheck: null }
     runtimes.set(ctx, runtime)
   }
   return runtime
@@ -290,6 +290,50 @@ async function describeUser(settings, accessToken, userId) {
 }
 
 /**
+ * A stored session is only a claim until the console has answered for it.
+ * Ask /api/user/self on the first status call after boot: a good answer
+ * brings the display name back (runtime.user lives in memory, so a restart
+ * loses it even after a real sign-in); a definite rejection means the token
+ * was revoked or reissued on another device — keeping the claim would leave
+ * the app "signed in" on a dead session forever, so clear it and let the
+ * gate return. A network failure decides nothing: an offline start must not
+ * be locked out, so the claim stands and the next status call asks again.
+ */
+async function verifySession(ctx, runtime, settings, accessToken, userId) {
+  let self
+  try {
+    self = await consoleFetch(settings.site, '/api/user/self', { accessToken, userId })
+  } catch {
+    runtime.sessionCheck = null
+    return true
+  }
+  if (self.body?.success === true) {
+    runtime.user = {
+      id: userId,
+      username: typeof self.body.data?.username === 'string' ? self.body.data.username : '',
+      displayName: typeof self.body.data?.display_name === 'string' ? self.body.data.display_name : '',
+    }
+    return true
+  }
+  // The console does not always speak in status codes: this deployment
+  // answers a bad token with 200 + {success:false, "Unauthorized…"}. Any
+  // coherent answer that refuses to identify the bearer is a rejection.
+  if (self.status === 401 || self.status === 403 || self.body?.success === false) {
+    // Sign-in may have raced this check and stored a fresh session. A late
+    // rejection only ever speaks for the token it was issued against, so it
+    // may clear nothing unless that token is still the one on file.
+    const current = resolvedValue(await ctx.credentials.resolve(TOKENS_LOGIN.accessTokenRef))
+    if (current !== accessToken) return true
+    await logout(ctx, runtime)
+    return false
+  }
+  // An incoherent answer (404, HTML instead of JSON): not proof of a dead
+  // session, but not a profile either. Keep the claim, ask again later.
+  runtime.sessionCheck = null
+  return true
+}
+
+/**
  * Sign-in end to end: default browser → loopback callback → access token →
  * sk- key. Resolves with '' on success, or the key-provisioning error when
  * the session landed but the key did not: a failed hand-off never undoes a
@@ -415,6 +459,7 @@ async function setApiKey(ctx, settings, body) {
  */
 async function logout(ctx, runtime) {
   runtime.user = null
+  runtime.sessionCheck = null
   for (const ref of [TOKENS_LOGIN.accessTokenRef, TOKENS_LOGIN.userIdRef]) {
     if (typeof ctx.credentials.unset === 'function') await ctx.credentials.unset(ref)
     else await ctx.credentials.set(ref, '')
@@ -468,11 +513,31 @@ async function listApiKeys(ctx, settings) {
   }))
 }
 
-/** Reveal one key for the eye toggle in Settings; nothing is stored. */
+/**
+ * Reveal one key for the eye toggle in Settings; nothing is stored. Without
+ * an id it answers with the key this app itself uses — a local read, so the
+ * Settings header can show it in full even when only the key (no session)
+ * is present.
+ */
 async function revealApiKey(ctx, settings, body) {
+  if (body?.id === undefined) {
+    return resolvedValue(await ctx.credentials.resolve(TOKENS_LOGIN.apiKeyRef))
+  }
   const id = Number(body?.id)
   if (!Number.isInteger(id)) throw new LoginError('invalid_input', '无效的 API Key 编号')
   return fetchFullKey(settings, await storedSession(ctx), id)
+}
+
+/**
+ * Switch the app to one of the account's keys: the Settings 「使用」 path.
+ * The same verify-then-persist steps as every other way a key gets in.
+ */
+async function useApiKey(ctx, settings, body) {
+  const id = Number(body?.id)
+  if (!Number.isInteger(id)) throw new LoginError('invalid_input', '无效的 API Key 编号')
+  const fullKey = await fetchFullKey(settings, await storedSession(ctx), id)
+  await validateApiKey(settings.site, fullKey)
+  await persistApiKey(ctx, fullKey)
 }
 
 /** Last four characters only; enough to tell two keys apart, useless if leaked. */
@@ -482,8 +547,10 @@ function maskApiKey(apiKey) {
 
 /**
  * Two independent facts, deliberately not folded into one:
- *   signedIn      — an account session exists (access token + user id).
- *                   This, and only this, is what the gate judges.
+ *   signedIn      — an account session exists (access token + user id) and,
+ *                   once per boot, the console has vouched for it (a definite
+ *                   rejection clears it; an unreachable console decides
+ *                   nothing). This, and only this, is what the gate judges.
  *   authenticated — a verified relay key sits in the credential plane.
  *                   This is what downstream plugins judge; a key can be
  *                   present without a session, and a session without a key.
@@ -494,10 +561,16 @@ async function loginStatus(ctx, runtime, settings) {
     ctx.credentials.resolve(TOKENS_LOGIN.userIdRef),
     ctx.credentials.resolve(TOKENS_LOGIN.apiKeyRef),
   ])
+  let signedIn =
+    resolvedValue(token) !== '' && Number.isInteger(Number(resolvedValue(id))) && resolvedValue(id) !== ''
+  if (signedIn && runtime.user === null) {
+    runtime.sessionCheck ??= verifySession(ctx, runtime, settings, resolvedValue(token), Number(resolvedValue(id)))
+    signedIn = await runtime.sessionCheck
+  }
   return {
     site: settings.site,
     authenticated: await storedApiKeyAuthenticated(ctx),
-    signedIn: resolvedValue(token) !== '' && Number.isInteger(Number(resolvedValue(id))) && resolvedValue(id) !== '',
+    signedIn,
     user: runtime.user,
     canSignIn: externalBrowser(ctx) !== null,
     // The gate mounts before the locale plugin sets <html lang>, so the app's
@@ -595,6 +668,7 @@ function registerLoginRoute(scope, host, settings) {
         else if (body?.action === 'setApiKey') await setApiKey(host, settings, body)
         else if (body?.action === 'logout') await logout(host, runtime)
         else if (body?.action === 'refreshApiKey') await refreshApiKey(host, settings)
+        else if (body?.action === 'useApiKey') await useApiKey(host, settings, body)
         else throw new LoginError('invalid_input', 'unknown action')
         send(200, {
           ...(apiKeyError === '' ? {} : { apiKeyError }),
@@ -623,6 +697,7 @@ export const __login = {
   setApiKey,
   refreshApiKey,
   listApiKeys,
+  useApiKey,
   revealApiKey,
   maskApiKey,
   maskLikeConsole,

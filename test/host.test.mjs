@@ -6,7 +6,7 @@ import { TOKENS_LOGIN, __login, apply, credentialFingerprint, inject, name } fro
 const {
   loopbackCallback,
   normalizeSite, normalizeSitePath, normalizeTokenName, isTrustedRequest, errorStatus, loginRuntime, login,
-  setApiKey, refreshApiKey, listApiKeys, revealApiKey, maskLikeConsole, logout, loginStatus,
+  setApiKey, refreshApiKey, listApiKeys, revealApiKey, useApiKey, maskLikeConsole, logout, loginStatus,
 } = __login
 
 const SETTINGS = Object.freeze({
@@ -221,6 +221,7 @@ test('status masks the relay key to its last four characters', async () => {
 
 test('signedIn tracks the account session, never the relay key', async () => {
   const ctx = fakeCtx()
+  mockConsole()
   // A verified key on its own is not a session: the gate must still appear.
   await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-leftover')
   await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-leftover'))
@@ -232,9 +233,101 @@ test('signedIn tracks the account session, never the relay key', async () => {
   await ctx.credentials.set(TOKENS_LOGIN.userIdRef, '7')
   status = await loginStatus(ctx, loginRuntime(ctx), SETTINGS)
   assert.equal(status.signedIn, true)
+  // Verification doubles as hydration: the name survives a restart now.
+  assert.equal(status.user?.username, 'alice')
   // A half-written session (token, no user id) is not one either.
   await ctx.credentials.set(TOKENS_LOGIN.userIdRef, '')
   assert.equal((await loginStatus(ctx, loginRuntime(ctx), SETTINGS)).signedIn, false)
+})
+
+test('a stored session is verified against the console exactly once per boot', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  let selfCalls = 0
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/api/user/self')) {
+      selfCalls += 1
+      return { status: 200, json: async () => ({ success: true, data: { username: 'alice', display_name: 'Alice' } }) }
+    }
+    throw new Error(`unmatched fetch: ${url}`)
+  }
+  const runtime = loginRuntime(ctx)
+  const first = await loginStatus(ctx, runtime, SETTINGS)
+  assert.equal(first.signedIn, true)
+  assert.equal(first.user?.displayName, 'Alice')
+  const second = await loginStatus(ctx, runtime, SETTINGS)
+  assert.equal(second.signedIn, true)
+  assert.equal(selfCalls, 1)
+})
+
+test('a session the console rejects is cleared; the relay key stays', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-keep')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-keep'))
+  // The deployed console rejects a bad token with 200 + success:false
+  // ("Unauthorized, invalid access token"), not an HTTP 401 — pin the real
+  // shape so only-status-code checks cannot sneak back in.
+  globalThis.fetch = async () => ({
+    status: 200,
+    json: async () => ({ success: false, message: 'Unauthorized, invalid access token' }),
+  })
+  const status = await loginStatus(ctx, loginRuntime(ctx), SETTINGS)
+  // The token was reissued on another device: the claim is dead, the gate
+  // must come back — but the key is a separate fact and keeps working.
+  assert.equal(status.signedIn, false)
+  assert.equal(status.user, null)
+  assert.equal(ctx.store.has(TOKENS_LOGIN.accessTokenRef), false)
+  assert.equal(ctx.store.has(TOKENS_LOGIN.userIdRef), false)
+  assert.equal(status.authenticated, true)
+})
+
+test('a console that speaks in status codes is understood too', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  globalThis.fetch = async () => ({ status: 401, json: async () => null })
+  const status = await loginStatus(ctx, loginRuntime(ctx), SETTINGS)
+  assert.equal(status.signedIn, false)
+  assert.equal(ctx.store.has(TOKENS_LOGIN.accessTokenRef), false)
+})
+
+test('an unreachable console decides nothing, and the next status asks again', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  globalThis.fetch = async () => {
+    throw new Error('offline')
+  }
+  const runtime = loginRuntime(ctx)
+  const offline = await loginStatus(ctx, runtime, SETTINGS)
+  // An offline start must not be locked out of a session it really has.
+  assert.equal(offline.signedIn, true)
+  assert.equal(offline.user, null)
+  // Back online: the memo was reset, so this status call verifies and names.
+  mockConsole()
+  const online = await loginStatus(ctx, runtime, SETTINGS)
+  assert.equal(online.signedIn, true)
+  assert.equal(online.user?.username, 'alice')
+})
+
+test('a late rejection of an old token never clears a fresh session', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  let release
+  globalThis.fetch = () =>
+    new Promise((resolve) => {
+      release = () => resolve({ status: 401, json: async () => ({ success: false }) })
+    })
+  const runtime = loginRuntime(ctx)
+  const pending = loginStatus(ctx, runtime, SETTINGS)
+  // While the console is still chewing on the old token, a browser sign-in
+  // lands a fresh session…
+  await ctx.credentials.set(TOKENS_LOGIN.accessTokenRef, 'fresh-token')
+  await ctx.credentials.set(TOKENS_LOGIN.userIdRef, '7')
+  release()
+  await pending
+  // …and the stale 401 must not wipe it.
+  assert.equal(ctx.store.get(TOKENS_LOGIN.accessTokenRef), 'fresh-token')
+  assert.equal(ctx.store.get(TOKENS_LOGIN.userIdRef), '7')
 })
 
 test('refreshApiKey refuses before sign-in and re-provisions after it', async () => {
@@ -425,6 +518,30 @@ test('revealApiKey returns one full key and refuses a bad id', async () => {
   mockConsole()
   assert.equal(await revealApiKey(ctx, SETTINGS, { id: 3 }), 'sk-full-3')
   await assert.rejects(() => revealApiKey(ctx, SETTINGS, { id: 'nope' }), /无效的 API Key 编号/)
+})
+
+test('revealApiKey without an id answers with the stored key, session or not', async () => {
+  const ctx = fakeCtx()
+  // No key stored yet: an empty answer, not an error.
+  assert.equal(await revealApiKey(ctx, SETTINGS, {}), '')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-mine')
+  // A local read: no session, no network — the header works for key-only users.
+  assert.equal(await revealApiKey(ctx, SETTINGS, {}), 'sk-mine')
+})
+
+test('useApiKey switches the app to a listed key, verify-then-persist', async () => {
+  const ctx = fakeCtx()
+  await assert.rejects(() => useApiKey(ctx, SETTINGS, { id: 5 }), /请先登录/)
+  await seedSession(ctx)
+  mockConsole()
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-old')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-old'))
+  await useApiKey(ctx, SETTINGS, { id: 5 })
+  // The stored key and its fingerprint move together, so downstream plugins
+  // see the new key as verified with no extra step.
+  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-full-5')
+  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyVerificationRef), credentialFingerprint('sk-full-5'))
+  await assert.rejects(() => useApiKey(ctx, SETTINGS, { id: 'nope' }), /无效的 API Key 编号/)
 })
 
 test('an attempt nobody answers expires, and the next one starts clean', async () => {

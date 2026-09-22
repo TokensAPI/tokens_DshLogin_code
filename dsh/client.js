@@ -90,9 +90,6 @@ window.__ModuleLoader__.load({
             apiKeyOk: '已验证',
             refresh: '重新获取',
             refreshing: '正在获取…',
-            manual: '手动填入 API Key',
-            save: '保存',
-            saving: '正在验证…',
             done: '已更新',
             browserUnavailable: '当前版本不支持浏览器登录，请手动填入 API Key。',
             keysLoading: '正在读取账户中的 API Key…',
@@ -101,6 +98,10 @@ window.__ModuleLoader__.load({
             keyDisabled: '已禁用',
             show: '显示',
             hide: '隐藏',
+            copy: '复制',
+            copied: '已复制',
+            use: '使用',
+            switching: '正在切换…',
           }
         : {
             nav: 'Account',
@@ -118,9 +119,6 @@ window.__ModuleLoader__.load({
             apiKeyOk: 'Verified',
             refresh: 'Fetch again',
             refreshing: 'Fetching…',
-            manual: 'Enter an API key manually',
-            save: 'Save',
-            saving: 'Verifying…',
             done: 'Updated',
             browserUnavailable: 'This build cannot open a browser sign-in; enter an API key manually.',
             keysLoading: 'Loading the keys on this account…',
@@ -129,8 +127,39 @@ window.__ModuleLoader__.load({
             keyDisabled: 'Disabled',
             show: 'Show',
             hide: 'Hide',
+            copy: 'Copy',
+            copied: 'Copied',
+            use: 'Use',
+            switching: 'Switching…',
           }
     }
+
+    /** Clipboard with the execCommand fallback for non-secure contexts. */
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).catch(() => copyFallback(text))
+      }
+      return Promise.resolve(copyFallback(text))
+    }
+    function copyFallback(text) {
+      var area = document.createElement('textarea')
+      area.value = text
+      area.style.position = 'fixed'
+      area.style.opacity = '0'
+      document.body.appendChild(area)
+      area.select()
+      try {
+        document.execCommand('copy')
+      } finally {
+        document.body.removeChild(area)
+      }
+    }
+
+    // What the account page shows, kept across visits: entering the page
+    // reuses the last answer instead of asking again. Only an action on the
+    // page (sign-in, switch, refresh) updates it — and sign-out reloads the
+    // window, which empties it wholesale.
+    var accountCache = { status: null, keys: null }
 
     function postAction(body) {
       return fetch(ROUTE, {
@@ -406,8 +435,8 @@ window.__ModuleLoader__.load({
               marginBottom: 16,
             },
           },
-          h('div', { style: { fontSize: 14, fontWeight: 600, marginBottom: 6 } }, title),
-          h('div', { style: { color: 'var(--dsw-alias-label-secondary, #666)', marginBottom: 12 } }, value),
+          h('div', { style: { fontSize: 14, fontWeight: 600, marginBottom: value ? 6 : 10 } }, title),
+          value ? h('div', { style: { color: 'var(--dsw-alias-label-secondary, #666)', marginBottom: 12 } }, value) : null,
           controls,
           hint
             ? h(
@@ -438,30 +467,90 @@ window.__ModuleLoader__.load({
           },
           label,
         )
+      // Icon-only buttons: the standard two-squares copy glyph, and a check
+      // for the moment right after a successful copy.
+      var copyGlyph = () =>
+        h(
+          'svg',
+          { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          h('rect', { x: 9, y: 9, width: 13, height: 13, rx: 2 }),
+          h('path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }),
+        )
+      var eyeGlyph = () =>
+        h(
+          'svg',
+          { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          h('path', { d: 'M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z' }),
+          h('circle', { cx: 12, cy: 12, r: 3 }),
+        )
+      var eyeOffGlyph = () =>
+        h(
+          'svg',
+          { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          h('path', { d: 'M17.94 17.94A10.07 10.07 0 0 1 12 19c-7 0-11-7-11-7a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 5c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24' }),
+          h('path', { d: 'm1 1 22 22' }),
+        )
+      var checkGlyph = () =>
+        h(
+          'svg',
+          { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          h('path', { d: 'M20 6 9 17l-5-5' }),
+        )
+      var iconAction = (icon, titleText, onClick, disabled, tone) =>
+        h(
+          'button',
+          {
+            type: 'button',
+            title: titleText,
+            'aria-label': titleText,
+            disabled: disabled === true,
+            onClick: onClick,
+            style: {
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 36,
+              height: 36,
+              padding: 0,
+              borderRadius: 8,
+              border: '1px solid var(--dsw-alias-border-l2, #ddd)',
+              background: 'transparent',
+              color: tone || 'inherit',
+              cursor: disabled === true ? 'default' : 'pointer',
+              opacity: disabled === true ? 0.55 : 1,
+              transition: 'background .12s ease',
+            },
+          },
+          icon,
+        )
       return function TokensAccount() {
-        var statePair = react.useState(null)
+        var statePair = react.useState(accountCache.status)
         var notePair = react.useState('')
         var erroredPair = react.useState(false)
         var busyPair = react.useState('')
-        var manualPair = react.useState(false)
-        var keyPair = react.useState('')
         // The account's keys, loaded once signed in: null while unknown, [] when
         // the account has none. revealed holds only the keys the user asked to
         // see, and hiding one drops it again — nothing is kept around.
-        var keysPair = react.useState(null)
+        var keysPair = react.useState(accountCache.keys)
         var keysErrorPair = react.useState('')
         var revealedPair = react.useState({})
+        var copiedPair = react.useState(null)
+        // Which row 「使用」 was clicked, so only that button says switching.
+        var switchTargetPair = react.useState(null)
         var state = statePair[0]
         var note = notePair[0]
         var busy = busyPair[0]
         var t = accountLabels()
 
         react.useEffect(() => {
+          if (accountCache.status !== null) return undefined
           var alive = true
           fetch(ROUTE, { cache: 'no-store' })
             .then((response) => response.json().then((body) => ({ response: response, body: rememberLocale(body) })))
             .then(({ response, body }) => {
-              if (alive && response.ok) statePair[1](body)
+              if (!response.ok) return
+              accountCache.status = body
+              if (alive) statePair[1](body)
             })
             .catch(() => {})
           return () => {
@@ -474,7 +563,9 @@ window.__ModuleLoader__.load({
           postAction({ action: 'listApiKeys' })
             .then(({ response, body }) => {
               if (!response.ok) throw new Error(body?.error || 'request failed')
-              keysPair[1](Array.isArray(body?.apiKeys) ? body.apiKeys : [])
+              var keys = Array.isArray(body?.apiKeys) ? body.apiKeys : []
+              accountCache.keys = keys
+              keysPair[1](keys)
             })
             .catch((error) => keysErrorPair[1](String(error?.message || error)))
         }
@@ -511,6 +602,7 @@ window.__ModuleLoader__.load({
                 notePair[1](String(result?.error || 'request failed'))
                 return
               }
+              accountCache.status = result
               statePair[1](result)
               // Signing out must put the gate back in front of the shell.
               // Reloading is the whole of it: the plugin remounts, the status
@@ -525,10 +617,6 @@ window.__ModuleLoader__.load({
                 return
               }
               notePair[1](t.done)
-              if (kind === 'setApiKey') {
-                keyPair[1]('')
-                manualPair[1](false)
-              }
               // Which key is in use may have just changed. After a sign-in the
               // list loads on its own, when signedIn flips.
               revealedPair[1]({})
@@ -545,9 +633,43 @@ window.__ModuleLoader__.load({
         // The list belongs to the account, so it is only worth asking for once
         // there is a session, and worth asking for again whenever one appears.
         react.useEffect(() => {
-          if (signedIn) loadKeys()
-          else keysPair[1](null)
+          if (signedIn && keysPair[0] === null) loadKeys()
+          else if (!signedIn) keysPair[1](null)
         }, [signedIn])
+
+        var authenticated = state?.authenticated === true
+        // The switching label belongs to one row; once the action settles
+        // (either way), every 「使用」 button goes back to rest.
+        react.useEffect(() => {
+          if (busy === '') switchTargetPair[1](null)
+        }, [busy])
+
+        // 「已复制」 flips the one button that was clicked, then flips back.
+        var markCopied = (which) => {
+          copiedPair[1](which)
+          setTimeout(() => copiedPair[1]((current) => (current === which ? null : current)), 1500)
+        }
+        var copyKey = (which, text) => {
+          copyText(text).then(
+            () => markCopied(which),
+            (error) => keysErrorPair[1](String(error?.message || error)),
+          )
+        }
+        // Copy a listed key: reuse the revealed text when the row is open,
+        // fetch it for this copy alone when it is not (nothing gets shown).
+        var copyRow = (item) => {
+          var shown = revealedPair[0][item.id]
+          if (shown !== undefined) {
+            copyKey(item.id, shown)
+            return
+          }
+          postAction({ action: 'revealApiKey', id: item.id })
+            .then(({ response, body }) => {
+              if (!response.ok) throw new Error(body?.error || 'request failed')
+              copyKey(item.id, String(body?.apiKey || ''))
+            })
+            .catch((error) => keysErrorPair[1](String(error?.message || error)))
+        }
 
         var who = state?.user?.displayName || state?.user?.username || ''
         var accountValue = signedIn ? (who ? t.signedIn + ' · ' + who : t.signedIn) : t.signedOut
@@ -557,55 +679,6 @@ window.__ModuleLoader__.load({
           : state?.canSignIn !== true
             ? h('div', { style: { color: 'var(--dsw-alias-label-secondary, #666)' } }, t.browserUnavailable)
             : action(busy === 'login' ? t.signingIn : t.signIn, () => run('login', { action: 'login' }), busy !== '', true)
-
-        var manualForm = manualPair[0]
-          ? h(
-              'form',
-              {
-                onSubmit: (event) => {
-                  event.preventDefault()
-                  var apiKey = keyPair[0].trim()
-                  if (apiKey) run('setApiKey', { action: 'setApiKey', apiKey: apiKey })
-                },
-                style: { display: 'flex', gap: 8, marginTop: 12 },
-              },
-              h('input', {
-                type: 'password',
-                value: keyPair[0],
-                autoComplete: 'off',
-                spellCheck: false,
-                placeholder: 'sk-…',
-                onChange: (event) => keyPair[1](event.target.value),
-                style: {
-                  flex: 1,
-                  padding: '8px 10px',
-                  borderRadius: 8,
-                  border: '1px solid var(--dsw-alias-border-l2, #ddd)',
-                  background: 'var(--dsw-alias-bg-layer-2, transparent)',
-                  color: 'inherit',
-                  font: 'inherit',
-                },
-              }),
-              h(
-                'button',
-                {
-                  type: 'submit',
-                  disabled: busy !== '' || keyPair[0].trim() === '',
-                  style: {
-                    padding: '8px 14px',
-                    borderRadius: 8,
-                    border: 0,
-                    background: 'var(--dsw-alias-state-business-primary, #2563eb)',
-                    color: 'var(--dsw-alias-bg-layer-2, #fff)',
-                    font: 'inherit',
-                    fontWeight: 600,
-                    cursor: busy !== '' ? 'default' : 'pointer',
-                  },
-                },
-                busy === 'setApiKey' ? t.saving : t.save,
-              ),
-            )
-          : null
 
         var muted = 'var(--dsw-alias-label-secondary, #666)'
         var keyRow = (item) => {
@@ -658,7 +731,29 @@ window.__ModuleLoader__.load({
               },
               shown === undefined ? item.masked : shown,
             ),
-            action(shown === undefined ? t.show : t.hide, () => toggleReveal(item), busy !== ''),
+            h(
+              'div',
+              { style: { display: 'flex', gap: 6, flexShrink: 0 } },
+              item.enabled && !item.inUse
+                ? action(
+                    busy === 'useApiKey' && switchTargetPair[0] === item.id ? t.switching : t.use,
+                    () => {
+                      switchTargetPair[1](item.id)
+                      run('useApiKey', { action: 'useApiKey', id: item.id })
+                    },
+                    busy !== '',
+                  )
+                : null,
+              iconAction(
+                shown === undefined ? eyeGlyph() : eyeOffGlyph(),
+                shown === undefined ? t.show : t.hide,
+                () => toggleReveal(item),
+                busy !== '',
+              ),
+              copiedPair[0] === item.id
+                ? iconAction(checkGlyph(), t.copied, () => {}, false, 'var(--dsw-alias-state-success-primary, #16a34a)')
+                : iconAction(copyGlyph(), t.copy, () => copyRow(item), busy !== ''),
+            ),
           )
         }
 
@@ -677,18 +772,18 @@ window.__ModuleLoader__.load({
                   : keysPair[0].map(keyRow),
             )
 
-        var keyControls = h(
-          'div',
-          { style: { display: 'flex', flexWrap: 'wrap', gap: 8 } },
-          signedIn
-            ? action(
+        // Below the list: the one remaining account-wide action.
+        var refreshBar = signedIn
+          ? h(
+              'div',
+              { style: { marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--dsw-alias-border-l2, #eee)' } },
+              action(
                 busy === 'refreshApiKey' ? t.refreshing : t.refresh,
                 () => run('refreshApiKey', { action: 'refreshApiKey' }),
                 busy !== '',
-              )
-            : null,
-          action(t.manual, () => manualPair[1](!manualPair[0]), busy !== ''),
-        )
+              ),
+            )
+          : null
 
         return h(
           'div',
@@ -713,8 +808,8 @@ window.__ModuleLoader__.load({
           row(t.account, accountValue, accountControls, signedIn ? t.signOutHint : ''),
           row(
             t.apiKey,
-            state?.authenticated === true ? (state.apiKeyMasked || '') + ' · ' + t.apiKeyOk : t.apiKeyNone,
-            h('div', undefined, keyControls, manualForm, keyList),
+            signedIn ? null : authenticated ? (state?.apiKeyMasked || '') + ' · ' + t.apiKeyOk : t.apiKeyNone,
+            h('div', undefined, keyList, refreshBar),
           ),
         )
       }
