@@ -90,3 +90,8 @@
 ```bash
 node --test
 ```
+
+## 发布
+
+发布到自建源 `https://npm.tokensapi.ai/`，由 GitHub Actions 在推送 `v*` 标签时自动完成。
+步骤与排查见 [docs/publishing.md](docs/publishing.md)。

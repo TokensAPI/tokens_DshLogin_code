@@ -82,6 +82,11 @@ session only — the key and its verification marker are left in place.
 npm test
 ```
 
+## Publishing
+
+Releases go to the self-hosted registry `https://npm.tokensapi.ai/`, published by GitHub Actions
+when a `v*` tag is pushed. See [docs/publishing.md](docs/publishing.md).
+
 ## License
 
 MIT

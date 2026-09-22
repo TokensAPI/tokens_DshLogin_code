@@ -1,15 +1,17 @@
-name: Publish to Private npm
+name: Verify and Publish to Private npm
 
-# 检查由 ci.yml 负责（push / pull_request）。这里只管发布，所以只在打
-# 标签或手动触发时运行，避免每次推送都把同一套测试跑两遍。
+# 分工：ci.yml 跑 Node 版本矩阵的功能检查；本工作流只管发布这条路——
+# 在 main 上先把产物打出来验一遍，推 v* 标签时再发。
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Existing tag to publish (e.g. v0.1.1)'
-        required: true
+        description: 'Existing stable tag to publish (leave empty for checks only)'
+        required: false
         type: string
   push:
+    branches:
+      - main
     tags:
       - 'v*'
 
@@ -17,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ inputs.release_tag || github.ref }}
+  group: publish-${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -26,63 +28,69 @@ env:
   APPROVED_PUBLISHER: tokenscowork
 
 jobs:
-  publish:
-    name: Verify and publish
+  release:
+    name: Verify package and publish
     runs-on: ubuntu-latest
-    # 只有本仓库能发布：fork 上打标签不会碰到 Registry。
-    if: github.repository == 'TokensAPI/tokens_DshLogin_code'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          # 手动重试时检出指定标签本身，而不是 main 的当前头。
+          ref: ${{ inputs.release_tag || github.ref }}
           persist-credentials: false
-          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.19.0
+          node-version: 24
           cache: npm
           registry-url: https://npm.tokensapi.ai/
 
-      # 不联网，先把"发错地方 / 标签与版本对不上"挡掉。
+      # 先于安装、且完全离线：标签和 package.json 对不上就没必要往下走。
       - name: Validate release identity
-        run: node scripts/validate-release.mjs "$RELEASE_TAG"
+        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         env:
           RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: node scripts/validate-release.mjs "$RELEASE_TAG"
 
-      # 本包零依赖，装不装都不影响测试；--ignore-scripts 保持与 ci.yml 一致。
+      # 本包零依赖，但 setup-node 已把私有源写进 .npmrc（那是发布方向）。
+      # 安装方向显式指回公共源，免得装依赖时去敲私有源。
       - name: Install dependencies
-        run: npm ci --ignore-scripts
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org/
 
-      - name: Run tests
+      - name: Run checks
         run: npm run check
 
-      - name: Pack verified release
+      # 没有构建步骤，dsh/*.js 即产物；"可运行"由解包后真的 import 一次来证明。
+      - name: Pack release artifact
         run: |
           mkdir -p .release
           npm pack --ignore-scripts --pack-destination .release
 
-      - name: Publish to Verdaccio
+      - name: Verify packed artifact
+        run: node scripts/verify-package.mjs .release
+
+      - name: Publish to private registry
+        if: github.repository == 'TokensAPI/tokens_DshLogin_code' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
         env:
           NODE_AUTH_TOKEN: ${{ secrets.VERDACCIO_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo 'Configure the VERDACCIO_PUBLISH_TOKEN repository secret before releasing.' >&2
+            echo "::error::缺少仓库 Secret VERDACCIO_PUBLISH_TOKEN，无法发布到 $PRIVATE_REGISTRY。请在 Settings → Secrets and variables → Actions 添加后重试。"
             exit 1
           fi
           publisher="$(npm whoami --registry="$PRIVATE_REGISTRY")"
           if [ "$publisher" != "$APPROVED_PUBLISHER" ]; then
-            echo 'The registry token does not belong to the approved publisher.' >&2
+            echo "::error::发布账号是 $publisher，期望 $APPROVED_PUBLISHER。请更换 Secret 中的令牌。"
             exit 1
           fi
-          version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')"
-          # 禁止覆盖已发布版本：命中就直接失败，改版本号后重发。
-          published="$(npm view "$PACKAGE_NAME@$version" version --registry="$PRIVATE_REGISTRY" 2>/dev/null || true)"
-          if [ -n "$published" ]; then
-            echo "$PACKAGE_NAME@$version is already published; bump the version instead of overwriting." >&2
+          version="$(node -p "require('./package.json').version")"
+          # 覆盖已发布版本会让已装到机器上的内容与版本号对不上，直接拒绝。
+          if npm view "$PACKAGE_NAME@$version" version --registry="$PRIVATE_REGISTRY" >/dev/null 2>&1; then
+            echo "::error::$PACKAGE_NAME@$version 已存在于 $PRIVATE_REGISTRY，拒绝覆盖。请改用新版本号。"
             exit 1
           fi
-          npm publish .release/*.tgz --ignore-scripts --registry="$PRIVATE_REGISTRY" --tag=latest
-          npm view "$PACKAGE_NAME@$version" version --registry="$PRIVATE_REGISTRY"
+          tarball="$(ls .release/*.tgz)"
+          npm publish "$tarball" --registry="$PRIVATE_REGISTRY" --access restricted
+          echo "Published $PACKAGE_NAME@$version to $PRIVATE_REGISTRY"
