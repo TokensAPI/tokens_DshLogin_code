@@ -1,4 +1,4 @@
-# @tokens/dsh-login — TokensAPI 登录插件
+# @tokensapi/dsh-login — TokensAPI 登录插件
 
 用 TokensAPI（new-api）**账号**登录 TokensCowork 桌面端，取代手动粘贴 API Key 的旧门禁。
 

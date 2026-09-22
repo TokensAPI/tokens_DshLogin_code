@@ -5,5 +5,5 @@
 
 - insert:
     - id: tokens-login
-      name: '@tokens/dsh-login'
+      name: '@tokensapi/dsh-login'
       config: {}

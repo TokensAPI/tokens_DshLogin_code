@@ -11,7 +11,7 @@
 // with a factory returning cordis-plugin exports), so no build step and no
 // imports from dsh client packages.
 window.__ModuleLoader__.load({
-  id: '@tokens/dsh-login',
+  id: '@tokensapi/dsh-login',
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
