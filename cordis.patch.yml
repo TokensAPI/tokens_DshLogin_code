@@ -1,0 +1,9 @@
+# TokensAPI account sign-in. Mounts the login gate ahead of the shell; the
+# model-manager plugin detects this route at startup and stands its own
+# API-key gate down. No credential value is present here: the host half
+# writes DSH credential references only.
+
+- insert:
+    - id: tokens-login
+      name: '@tokens/dsh-login'
+      config: {}
