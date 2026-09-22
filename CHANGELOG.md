@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.1.4
+
+- "Refresh" on the account page now only reloads the key list; it never
+  touches the key in use. Switching keys is the "Use" button's job alone.
+- Keys are copied, never displayed: the eye toggle is gone, and the copy
+  icon fetches the key for the clipboard alone, confirming with a check.
+- The list's controls sit in two fixed columns (copy, then "Use"), with the
+  in-use row leaving its "Use" cell empty, so everything lines up.
+- All account-page styling is inline on its own elements: no style tags, no
+  classes, nothing that can reach other plugins or the shell.
+
 ## 0.1.3
 
 - A stored sign-in is now verified with the console once per boot: a definite

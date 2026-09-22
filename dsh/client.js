@@ -88,16 +88,14 @@ window.__ModuleLoader__.load({
             apiKey: 'API Key',
             apiKeyNone: '未配置',
             apiKeyOk: '已验证',
-            refresh: '重新获取',
-            refreshing: '正在获取…',
+            refresh: '刷新列表',
+            refreshing: '正在刷新…',
             done: '已更新',
             browserUnavailable: '当前版本不支持浏览器登录，请手动填入 API Key。',
             keysLoading: '正在读取账户中的 API Key…',
             keysEmpty: '账户中还没有 API Key。',
             inUse: '当前使用',
             keyDisabled: '已禁用',
-            show: '显示',
-            hide: '隐藏',
             copy: '复制',
             copied: '已复制',
             use: '使用',
@@ -117,16 +115,14 @@ window.__ModuleLoader__.load({
             apiKey: 'API key',
             apiKeyNone: 'Not configured',
             apiKeyOk: 'Verified',
-            refresh: 'Fetch again',
-            refreshing: 'Fetching…',
+            refresh: 'Refresh list',
+            refreshing: 'Refreshing…',
             done: 'Updated',
             browserUnavailable: 'This build cannot open a browser sign-in; enter an API key manually.',
             keysLoading: 'Loading the keys on this account…',
             keysEmpty: 'This account has no API keys yet.',
             inUse: 'In use',
             keyDisabled: 'Disabled',
-            show: 'Show',
-            hide: 'Hide',
             copy: 'Copy',
             copied: 'Copied',
             use: 'Use',
@@ -476,20 +472,6 @@ window.__ModuleLoader__.load({
           h('rect', { x: 9, y: 9, width: 13, height: 13, rx: 2 }),
           h('path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }),
         )
-      var eyeGlyph = () =>
-        h(
-          'svg',
-          { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
-          h('path', { d: 'M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z' }),
-          h('circle', { cx: 12, cy: 12, r: 3 }),
-        )
-      var eyeOffGlyph = () =>
-        h(
-          'svg',
-          { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
-          h('path', { d: 'M17.94 17.94A10.07 10.07 0 0 1 12 19c-7 0-11-7-11-7a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 5c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24' }),
-          h('path', { d: 'm1 1 22 22' }),
-        )
       var checkGlyph = () =>
         h(
           'svg',
@@ -533,7 +515,6 @@ window.__ModuleLoader__.load({
         // see, and hiding one drops it again — nothing is kept around.
         var keysPair = react.useState(accountCache.keys)
         var keysErrorPair = react.useState('')
-        var revealedPair = react.useState({})
         var copiedPair = react.useState(null)
         // Which row 「使用」 was clicked, so only that button says switching.
         var switchTargetPair = react.useState(null)
@@ -570,26 +551,6 @@ window.__ModuleLoader__.load({
             .catch((error) => keysErrorPair[1](String(error?.message || error)))
         }
 
-        // Plain text on demand, masked again on the next click. The full key
-        // only ever travels for the row the user opened.
-        var toggleReveal = (item) => {
-          var revealed = revealedPair[0]
-          if (revealed[item.id] !== undefined) {
-            var hidden = Object.assign({}, revealed)
-            delete hidden[item.id]
-            revealedPair[1](hidden)
-            return
-          }
-          postAction({ action: 'revealApiKey', id: item.id })
-            .then(({ response, body }) => {
-              if (!response.ok) throw new Error(body?.error || 'request failed')
-              var shown = Object.assign({}, revealedPair[0])
-              shown[item.id] = String(body?.apiKey || '')
-              revealedPair[1](shown)
-            })
-            .catch((error) => keysErrorPair[1](String(error?.message || error)))
-        }
-
         var run = (kind, body) => {
           busyPair[1](kind)
           notePair[1]('')
@@ -619,7 +580,6 @@ window.__ModuleLoader__.load({
               notePair[1](t.done)
               // Which key is in use may have just changed. After a sign-in the
               // list loads on its own, when signedIn flips.
-              revealedPair[1]({})
               if (kind !== 'login') loadKeys()
             })
             .catch((error) => {
@@ -655,14 +615,8 @@ window.__ModuleLoader__.load({
             (error) => keysErrorPair[1](String(error?.message || error)),
           )
         }
-        // Copy a listed key: reuse the revealed text when the row is open,
-        // fetch it for this copy alone when it is not (nothing gets shown).
+        // Copy a listed key: fetched for this copy alone, never shown.
         var copyRow = (item) => {
-          var shown = revealedPair[0][item.id]
-          if (shown !== undefined) {
-            copyKey(item.id, shown)
-            return
-          }
           postAction({ action: 'revealApiKey', id: item.id })
             .then(({ response, body }) => {
               if (!response.ok) throw new Error(body?.error || 'request failed')
@@ -682,7 +636,6 @@ window.__ModuleLoader__.load({
 
         var muted = 'var(--dsw-alias-label-secondary, #666)'
         var keyRow = (item) => {
-          var shown = revealedPair[0][item.id]
           return h(
             'div',
             {
@@ -729,30 +682,30 @@ window.__ModuleLoader__.load({
                   whiteSpace: 'nowrap',
                 },
               },
-              shown === undefined ? item.masked : shown,
+              item.masked,
             ),
             h(
               'div',
-              { style: { display: 'flex', gap: 6, flexShrink: 0 } },
-              item.enabled && !item.inUse
-                ? action(
-                    busy === 'useApiKey' && switchTargetPair[0] === item.id ? t.switching : t.use,
-                    () => {
-                      switchTargetPair[1](item.id)
-                      run('useApiKey', { action: 'useApiKey', id: item.id })
-                    },
-                    busy !== '',
-                  )
-                : null,
-              iconAction(
-                shown === undefined ? eyeGlyph() : eyeOffGlyph(),
-                shown === undefined ? t.show : t.hide,
-                () => toggleReveal(item),
-                busy !== '',
-              ),
+              { style: { display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' } },
+              // Two fixed columns, so the controls line up down the list; the
+              // in-use row simply leaves its 「使用」 cell empty.
               copiedPair[0] === item.id
                 ? iconAction(checkGlyph(), t.copied, () => {}, false, 'var(--dsw-alias-state-success-primary, #16a34a)')
                 : iconAction(copyGlyph(), t.copy, () => copyRow(item), busy !== ''),
+              h(
+                'div',
+                { style: { minWidth: 64, display: 'flex', justifyContent: 'flex-end' } },
+                item.enabled && !item.inUse
+                  ? action(
+                      busy === 'useApiKey' && switchTargetPair[0] === item.id ? t.switching : t.use,
+                      () => {
+                        switchTargetPair[1](item.id)
+                        run('useApiKey', { action: 'useApiKey', id: item.id })
+                      },
+                      busy !== '',
+                    )
+                  : null,
+              ),
             ),
           )
         }
@@ -778,9 +731,15 @@ window.__ModuleLoader__.load({
               'div',
               { style: { marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--dsw-alias-border-l2, #eee)' } },
               action(
-                busy === 'refreshApiKey' ? t.refreshing : t.refresh,
-                () => run('refreshApiKey', { action: 'refreshApiKey' }),
-                busy !== '',
+                keysPair[0] === null ? t.refreshing : t.refresh,
+                () => {
+                  // A list refresh and nothing else: the key in use is not
+                  // touched — switching keys is what 「使用」 is for.
+                  keysPair[1](null)
+                  accountCache.keys = null
+                  loadKeys()
+                },
+                busy !== '' || keysPair[0] === null,
               ),
             )
           : null
