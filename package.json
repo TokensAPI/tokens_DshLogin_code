@@ -1,6 +1,6 @@
 {
     "name": "@tokensapi/dsh-login",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "description": "TokensAPI account sign-in for DeepSeek Harness Desktop: log in with the TokensAPI account system (password, Google/OAuth, wallet), then provision the API key automatically for the managed model plugins",
     "type": "module",
     "scripts": {
