@@ -1,0 +1,88 @@
+name: Publish to Private npm
+
+# 检查由 ci.yml 负责（push / pull_request）。这里只管发布，所以只在打
+# 标签或手动触发时运行，避免每次推送都把同一套测试跑两遍。
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing tag to publish (e.g. v0.1.1)'
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ inputs.release_tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  PRIVATE_REGISTRY: https://npm.tokensapi.ai/
+  PACKAGE_NAME: '@tokensapi/dsh-login'
+  APPROVED_PUBLISHER: tokenscowork
+
+jobs:
+  publish:
+    name: Verify and publish
+    runs-on: ubuntu-latest
+    # 只有本仓库能发布：fork 上打标签不会碰到 Registry。
+    if: github.repository == 'TokensAPI/tokens_DshLogin_code'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+          cache: npm
+          registry-url: https://npm.tokensapi.ai/
+
+      # 不联网，先把"发错地方 / 标签与版本对不上"挡掉。
+      - name: Validate release identity
+        run: node scripts/validate-release.mjs "$RELEASE_TAG"
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+
+      # 本包零依赖，装不装都不影响测试；--ignore-scripts 保持与 ci.yml 一致。
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run tests
+        run: npm run check
+
+      - name: Pack verified release
+        run: |
+          mkdir -p .release
+          npm pack --ignore-scripts --pack-destination .release
+
+      - name: Publish to Verdaccio
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.VERDACCIO_PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo 'Configure the VERDACCIO_PUBLISH_TOKEN repository secret before releasing.' >&2
+            exit 1
+          fi
+          publisher="$(npm whoami --registry="$PRIVATE_REGISTRY")"
+          if [ "$publisher" != "$APPROVED_PUBLISHER" ]; then
+            echo 'The registry token does not belong to the approved publisher.' >&2
+            exit 1
+          fi
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')"
+          # 禁止覆盖已发布版本：命中就直接失败，改版本号后重发。
+          published="$(npm view "$PACKAGE_NAME@$version" version --registry="$PRIVATE_REGISTRY" 2>/dev/null || true)"
+          if [ -n "$published" ]; then
+            echo "$PACKAGE_NAME@$version is already published; bump the version instead of overwriting." >&2
+            exit 1
+          fi
+          npm publish .release/*.tgz --ignore-scripts --registry="$PRIVATE_REGISTRY" --tag=latest
+          npm view "$PACKAGE_NAME@$version" version --registry="$PRIVATE_REGISTRY"
