@@ -593,7 +593,9 @@ window.__ModuleLoader__.load({
         // The list belongs to the account, so it is only worth asking for once
         // there is a session, and worth asking for again whenever one appears.
         react.useEffect(() => {
-          if (signedIn && keysPair[0] === null) loadKeys()
+          // An empty list is worth asking about again: the account may have
+          // been filled since, and a cached [] would hide it until 「刷新列表」.
+          if (signedIn && (keysPair[0] === null || keysPair[0].length === 0)) loadKeys()
           else if (!signedIn) keysPair[1](null)
         }, [signedIn])
 

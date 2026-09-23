@@ -155,14 +155,37 @@ test('login reuses an existing enabled token instead of creating one', async () 
   assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-full-5')
 })
 
-test('login keeps a verified stored key untouched', async () => {
+test('login keeps a stored key the account itself lists', async () => {
   const ctx = fakeCtx()
-  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-keep')
-  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-keep'))
-  const state = signIn(ctx)
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-abcdefgh12345678')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-abcdefgh12345678'))
+  const state = signIn(ctx, { tokens: [{ id: 3, name: 'laptop', status: 1, key: 'abcd**********5678' }] })
   assert.equal(await login(ctx, loginRuntime(ctx), SETTINGS), '')
   assert.equal(state.created, 0)
-  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-keep')
+  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-abcdefgh12345678')
+})
+
+test('login replaces a verified key the account does not have', async () => {
+  const ctx = fakeCtx()
+  // What account 102 left behind: locally verified, and nowhere on this account.
+  await ctx.credentials.set(TOKENS_LOGIN.userIdRef, '102')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-someone-else')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-someone-else'))
+  const state = signIn(ctx)
+  assert.equal(await login(ctx, loginRuntime(ctx), SETTINGS), '')
+  assert.equal(state.created, 1)
+  assert.equal(ctx.store.get(TOKENS_LOGIN.userIdRef), '7')
+  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-full-99')
+})
+
+test('signing in again as the same account still drops a foreign key', async () => {
+  const ctx = fakeCtx()
+  await ctx.credentials.set(TOKENS_LOGIN.userIdRef, '7')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-someone-else')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-someone-else'))
+  signIn(ctx, { tokens: [{ id: 5, name: 'existing', status: 1, key: 'zzzz**********wwww' }] })
+  assert.equal(await login(ctx, loginRuntime(ctx), SETTINGS), '')
+  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-full-5')
 })
 
 test('a failed key provisioning keeps the sign-in and reports the message', async () => {
@@ -492,6 +515,7 @@ test('listApiKeys shows every key masked and marks the one in use', async () => 
   await assert.rejects(() => listApiKeys(ctx, SETTINGS), /请先登录/)
   await seedSession(ctx)
   await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-abcdefgh12345678')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-abcdefgh12345678'))
   mockConsole({
     tokens: [
       { id: 3, name: 'laptop', status: 1, key: 'abcd**********5678' },
@@ -509,6 +533,52 @@ test('listApiKeys marks nothing when no key is stored', async () => {
   await seedSession(ctx)
   mockConsole({ tokens: [{ id: 3, name: 'laptop', status: 1, key: 'abcd**********5678' }] })
   assert.equal((await listApiKeys(ctx, SETTINGS))[0].inUse, false)
+})
+
+test('listApiKeys adopts one of the account keys when the stored key is foreign', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-someone-else')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-someone-else'))
+  const state = mockConsole({ tokens: [{ id: 5, name: 'existing', status: 1, key: 'zzzz**********wwww' }] })
+  const keys = await listApiKeys(ctx, SETTINGS)
+  assert.equal(state.created, 0)
+  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-full-5')
+  assert.equal(keys.length, 1)
+})
+
+test('listApiKeys leaves a key the account lists alone', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-abcdefgh12345678')
+  await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-abcdefgh12345678'))
+  mockConsole({
+    tokens: [
+      { id: 3, name: 'laptop', status: 1, key: 'abcd**********5678' },
+      { id: 5, name: 'other', status: 1, key: 'zzzz**********wwww' },
+    ],
+  })
+  assert.equal((await listApiKeys(ctx, SETTINGS)).find((item) => item.inUse).id, 3)
+  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-abcdefgh12345678')
+})
+
+test('listApiKeys provisions the first key when the account has none', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  const state = mockConsole({ tokens: [] })
+  const keys = await listApiKeys(ctx, SETTINGS)
+  assert.equal(state.created, 1)
+  assert.equal(keys.length, 1)
+  assert.equal(keys[0].name, SETTINGS.tokenName)
+  assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-full-99')
+})
+
+test('listApiKeys stays empty when auto-creation is off', async () => {
+  const ctx = fakeCtx()
+  await seedSession(ctx)
+  const state = mockConsole({ tokens: [] })
+  assert.deepEqual(await listApiKeys(ctx, { ...SETTINGS, autoCreateApiKey: false }), [])
+  assert.equal(state.created, 0)
 })
 
 test('revealApiKey returns one full key and refuses a bad id', async () => {

@@ -134,6 +134,14 @@ async function storedApiKeyAuthenticated(ctx) {
   return apiKey.length > 0 && resolvedValue(verification) === credentialFingerprint(apiKey)
 }
 
+/** Whether the key we hold is one of the keys this account actually has. */
+async function storedApiKeyListed(ctx, items) {
+  if (!(await storedApiKeyAuthenticated(ctx))) return false
+  const stored = resolvedValue(await ctx.credentials.resolve(TOKENS_LOGIN.apiKeyRef)).replace(/^sk-/u, '')
+  const masked = maskLikeConsole(stored)
+  return items.some((item) => item.key === masked)
+}
+
 async function persistApiKey(ctx, apiKey) {
   await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, apiKey)
   await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint(apiKey))
@@ -422,9 +430,12 @@ async function fetchFullKey(settings, auth, id) {
  * and persist after validation.
  */
 async function ensureApiKey(ctx, settings, auth, force = false) {
-  if (!force && (await storedApiKeyAuthenticated(ctx))) return
   const listTokens = async () => (await fetchTokens(settings, auth)).filter((item) => item.status === 1)
   let enabled = await listTokens()
+  // A stored key passes its own verification no matter which account it came
+  // from, so a key left behind by an earlier sign-in would be kept while its
+  // owner is no longer the one here. The account's own list is what settles it.
+  if (!force && (await storedApiKeyListed(ctx, enabled))) return
   let target = enabled.find((item) => item.name === settings.tokenName) ?? enabled[0]
   if (!target) {
     if (!settings.autoCreateApiKey) throw new LoginError('no_api_key', '账户中没有可用的 API Key')
@@ -501,7 +512,16 @@ function maskLikeConsole(key) {
 
 /** Every key on the account, masked, with the one this app uses marked. */
 async function listApiKeys(ctx, settings) {
-  const items = await fetchTokens(settings, await storedSession(ctx))
+  const auth = await storedSession(ctx)
+  let items = await fetchTokens(settings, auth)
+  // The page is the other place we hold the account's own list, so it is where
+  // a key belonging to nobody here gets noticed — and where an account with
+  // nothing on it gets its first key, rather than showing an empty dead end.
+  const enabled = items.filter((item) => item.status === 1)
+  if ((enabled.length > 0 || settings.autoCreateApiKey) && !(await storedApiKeyListed(ctx, enabled))) {
+    await ensureApiKey(ctx, settings, auth, true)
+    items = await fetchTokens(settings, auth)
+  }
   const stored = resolvedValue(await ctx.credentials.resolve(TOKENS_LOGIN.apiKeyRef)).replace(/^sk-/u, '')
   const inUse = stored === '' ? '' : maskLikeConsole(stored)
   return items.map((item) => ({
