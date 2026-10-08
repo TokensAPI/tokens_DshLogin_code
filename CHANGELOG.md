@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 0.1.7
 
 - Report rejected account sessions with localized re-sign-in guidance while
   retaining model credentials and avoiding a forced page reload.
@@ -10,6 +10,8 @@ All notable changes to this project are documented in this file.
   console failures without mistaking network or business errors for expiry.
 - Cover account action failures, fresh-login races and bilingual recovery in the
   existing functional case inventory and runner.
+
+[0.1.7](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.6...v0.1.7)
 
 ## 0.1.6
 
