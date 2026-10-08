@@ -443,6 +443,137 @@ function registerCases() {
       assert.equal(ctx.store.get(TOKENS_LOGIN.userIdRef), '7')
     })
 
+    function loginRoute(ctx) {
+      let route
+      ctx.inject = (services, callback) => {
+        if (services.includes('webServer')) callback({ webServer: { register: value => { route = value } } })
+      }
+      apply(ctx, SETTINGS)
+      return async (body) => {
+        let status, payload
+        const req = {
+          method: 'POST', headers: { host: '127.0.0.1:5299' },
+          async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body)) },
+        }
+        const res = { writeHead(value) { status = value; return this }, end(value) { payload = JSON.parse(value) } }
+        await route.handler(req, res)
+        return { status, body: payload }
+      }
+    }
+
+    test('account actions report expired sessions without clearing the model key', async () => {
+      for (const rejection of [200, 401, 403]) {
+        for (const action of ['listApiKeys', 'revealApiKey', 'useApiKey', 'refreshApiKey']) {
+          const ctx = fakeCtx()
+          await seedSession(ctx)
+          await ctx.credentials.set(TOKENS_LOGIN.apiKeyRef, 'sk-keep')
+          await ctx.credentials.set(TOKENS_LOGIN.apiKeyVerificationRef, credentialFingerprint('sk-keep'))
+          const runtime = loginRuntime(ctx)
+          runtime.user = { id: 7, username: 'alice' } // Already verified this boot.
+          let calls = 0
+          globalThis.fetch = async (url) => {
+            assert.ok(!String(url).includes('/v1/'), 'expiry must not validate or replace the model key')
+            calls++
+            return { status: rejection, json: async () => ({ success: false, message: 'Unauthorized, invalid access token' }) }
+          }
+          const result = await loginRoute(ctx)({ action, id: 1 })
+          assert.equal(result.status, 401)
+          assert.equal(result.body.code, 'session_expired')
+          assert.equal(result.body.status.signedIn, false)
+          assert.equal(result.body.status.sessionExpired, true)
+          assert.equal(result.body.status.authenticated, true)
+          assert.equal(ctx.store.has(TOKENS_LOGIN.accessTokenRef), false)
+          assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyRef), 'sk-keep')
+          assert.equal(ctx.store.get(TOKENS_LOGIN.apiKeyVerificationRef), credentialFingerprint('sk-keep'))
+          assert.ok(!JSON.stringify(result.body).includes('Unauthorized'))
+          assert.ok(!JSON.stringify(result.body).includes('sk-keep'))
+          assert.equal(calls, rejection === 200 ? 2 : 1)
+          assert.equal((await loginStatus(ctx, runtime, SETTINGS)).sessionExpired, true)
+          const repeated = await loginRoute(ctx)({ action, id: 1 })
+          assert.equal(repeated.body.code, 'session_expired')
+          assert.equal(repeated.body.status.sessionExpired, true)
+          assert.equal(calls, rejection === 200 ? 2 : 1, 'a cleared session must not be sent again')
+        }
+      }
+    })
+
+    test('account business errors and uncertain confirmation do not expire sessions', async () => {
+      for (const confirmation of ['valid', 'offline', 'server', 'html']) {
+        const ctx = fakeCtx()
+        await seedSession(ctx)
+        const runtime = loginRuntime(ctx)
+        runtime.user = { id: 7 }
+        globalThis.fetch = async (url) => {
+          if (String(url).endsWith('/api/user/self')) {
+            if (confirmation === 'offline') throw new Error('offline')
+            if (confirmation === 'server') return { status: 503, json: async () => null }
+            if (confirmation === 'html') return { status: 404, json: async () => { throw new Error('HTML') } }
+            return { status: 200, json: async () => ({ success: true, data: { id: 7 } }) }
+          }
+          return { status: 200, json: async () => ({ success: false, message: '账户业务错误' }) }
+        }
+        const result = await loginRoute(ctx)({ action: 'listApiKeys' })
+        assert.equal(result.status, 502)
+        assert.equal(result.body.code, 'upstream')
+        assert.equal(ctx.store.get(TOKENS_LOGIN.accessTokenRef), 't')
+        assert.equal(runtime.sessionExpired, false)
+      }
+    })
+
+    test('a late account action rejection leaves a newer login intact', async () => {
+      const ctx = fakeCtx()
+      await seedSession(ctx)
+      const runtime = loginRuntime(ctx)
+      runtime.user = { id: 7 }
+      let release, started
+      const ready = new Promise(resolve => { started = resolve })
+      globalThis.fetch = async () => new Promise(resolve => {
+        release = () => resolve({ status: 401, json: async () => ({ success: false }) })
+        started()
+      })
+      const pending = loginRoute(ctx)({ action: 'listApiKeys' })
+      await ready
+      await ctx.credentials.set(TOKENS_LOGIN.accessTokenRef, 'fresh-token')
+      runtime.user = { id: 7, username: 'fresh' }
+      release()
+      const result = await pending
+      assert.equal(result.body.code, 'upstream')
+      assert.equal(ctx.store.get(TOKENS_LOGIN.accessTokenRef), 'fresh-token')
+      assert.equal(runtime.sessionExpired, false)
+      assert.equal(runtime.user.username, 'fresh')
+    })
+
+    test('signing in again resets the expired notice and verifies the new session', async () => {
+      const ctx = fakeCtx()
+      const runtime = loginRuntime(ctx)
+      runtime.sessionExpired = true
+      signIn(ctx)
+      await login(ctx, runtime, SETTINGS)
+      const status = await loginStatus(ctx, runtime, SETTINGS)
+      assert.equal(status.signedIn, true)
+      assert.equal(status.sessionExpired, false)
+      assert.equal(status.authenticated, true)
+      await logout(ctx, runtime)
+      assert.equal((await loginStatus(ctx, runtime, SETTINGS)).sessionExpired, false)
+    })
+
+    test('a rejected browser handoff is not reported as a successful login', async () => {
+      for (const point of ['profile', 'keys']) {
+        const ctx = fakeCtx()
+        signIn(ctx)
+        const original = globalThis.fetch
+        globalThis.fetch = async (url, init) => {
+          if (String(url).endsWith('/api/user/self') && point === 'keys') return original(url, init)
+          return { status: 401, json: async () => ({ success: false }) }
+        }
+        const result = await loginRoute(ctx)({ action: 'login' })
+        assert.equal(result.status, 401)
+        assert.equal(result.body.code, 'session_expired')
+        assert.equal(result.body.status.signedIn, false)
+        assert.equal(result.body.status.sessionExpired, true)
+      }
+    })
+
     test('refreshApiKey refuses before sign-in and re-provisions after it', async () => {
       const ctx = fakeCtx()
       await assert.rejects(() => refreshApiKey(ctx, SETTINGS), /请先登录/)
@@ -894,16 +1025,211 @@ function registerCases() {
 
   // 中英文界面行为
   {
-    function client(language = '', browserLanguage = 'en-US') {
+    function client(language = '', browserLanguage = 'en-US', environment = {}) {
       let registration
-      const document = { documentElement: { lang: language } }
+      const document = environment.document ?? { documentElement: { lang: language } }
       runInNewContext(readFileSync(new URL('../dsh/client.js', import.meta.url), 'utf8'), {
         window: { __ModuleLoader__: { load: value => { registration = value } } },
         document,
         navigator: { language: browserLanguage },
+        ...environment,
       })
       return { gate: registration.factory(() => { throw new Error('No dependencies needed for labels') }).__gate, document }
     }
+
+    // Deterministic hook harness: executes the real component, request promises,
+    // effect dependencies and rendered button handlers, without a desktop/DOM.
+    function accountView(language, request) {
+      let reloaded = false
+      const { gate } = client(language, 'en-US', {
+        fetch: request, setTimeout, location: { reload: () => { reloaded = true } },
+        navigator: { language: 'en-US', clipboard: { writeText: async () => {} } },
+      })
+      const hooks = []
+      let cursor = 0, dirty = true, tree, pendingEffects = []
+      const react = {
+        createElement: (type, props, ...children) => ({ type, props: props || {}, children }),
+        useState(initial) {
+          const index = cursor++
+          hooks[index] ??= { value: initial }
+          return [hooks[index].value, value => {
+            const next = typeof value === 'function' ? value(hooks[index].value) : value
+            if (!Object.is(next, hooks[index].value)) { hooks[index].value = next; dirty = true }
+          }]
+        },
+        useRef(initial) {
+          const index = cursor++
+          hooks[index] ??= { current: initial }
+          return hooks[index]
+        },
+        useEffect(effect, deps) {
+          const index = cursor++
+          const old = hooks[index]
+          if (!old || deps.some((value, i) => !Object.is(value, old.deps[i]))) {
+            hooks[index] = { deps }
+            pendingEffects.push(() => { old?.cleanup?.(); hooks[index].cleanup = effect() })
+          }
+        },
+      }
+      const Component = gate.AccountSection(react)
+      function render() {
+        for (let attempts = 0; dirty; attempts++) {
+          assert.ok(attempts < 30, 'component must settle without a render loop')
+          dirty = false; cursor = 0
+          tree = Component()
+          const effects = pendingEffects; pendingEffects = []
+          for (const effect of effects) effect()
+        }
+      }
+      const flatten = value => Array.isArray(value) ? value.flatMap(flatten)
+        : value && typeof value === 'object' ? [value, ...flatten(value.children)] : [value]
+      return {
+        async flush() { for (let i = 0; i < 8; i++) { render(); await new Promise(resolve => setImmediate(resolve)) } render() },
+        text() { return flatten(tree).filter(value => typeof value === 'string').join('\n') },
+        button(label) { return flatten(tree).find(value => value?.type === 'button' && value.children.includes(label)) },
+        buttonByTitle(label) { return flatten(tree).find(value => value?.type === 'button' && value.props.title === label) },
+        get reloaded() { return reloaded },
+      }
+    }
+
+    const clientReply = (body, ok = true) => ({ ok, json: async () => body })
+    const accountStatus = { signedIn: true, authenticated: true, canSignIn: true, sessionExpired: false, user: { username: 'alice' } }
+
+    test('account expiry renders localized guidance and recovers through sign-in', async () => {
+      for (const language of ['zh-CN', 'en-US']) {
+        const zh = language === 'zh-CN'
+        let expired = true, loginBody
+        const view = accountView(language, async (_url, init) => {
+          if (init?.method !== 'POST') return clientReply(accountStatus)
+          const body = JSON.parse(init.body)
+          if (body.action === 'login') { expired = false; loginBody = body; return clientReply(accountStatus) }
+          assert.equal(body.action, 'listApiKeys')
+          return expired ? clientReply({ code: 'session_expired', error: 'Unauthorized, invalid access token',
+            status: { ...accountStatus, signedIn: false, sessionExpired: true, user: null } }, false)
+            : clientReply({ apiKeys: [{ id: 1, name: 'laptop', masked: 'sk-…1234', enabled: true, inUse: true }] })
+        })
+        await view.flush()
+        const text = view.text()
+        assert.ok(text.includes(zh ? '账户登录已失效' : 'Account sign-in is no longer valid'))
+        assert.ok(text.includes(zh ? '其他设备重新授权' : 'authorization on another device'))
+        assert.ok(text.includes(zh ? '未被清除' : 'has not been removed'))
+        assert.ok(!text.includes('Unauthorized'))
+        assert.ok(!text.includes(zh ? '正在读取' : 'Loading the keys'))
+        assert.ok(!text.includes(zh ? '已登录' : 'Signed in'))
+        assert.equal(view.button(zh ? '刷新列表' : 'Refresh list'), undefined)
+        const login = view.button(zh ? '重新登录' : 'Sign in again')
+        assert.equal(login.props.disabled, false)
+        assert.equal(view.reloaded, false, 'expiry must not reload or interrupt the shell')
+        if (!zh) assert.ok(!/[\u3400-\u9fff]/u.test(text), 'English guidance must not contain Chinese server messages')
+        login.props.onClick()
+        await view.flush()
+        assert.equal(loginBody.locale, zh ? 'zh' : 'en')
+        assert.ok(view.text().includes('laptop'))
+        assert.ok(!view.text().includes(zh ? '账户登录已失效' : 'Account sign-in is no longer valid'))
+        assert.equal(view.reloaded, false)
+      }
+    })
+
+    test('account list failures stop loading and permit a localized retry', async () => {
+      for (const language of ['zh-CN', 'en-US']) {
+        for (const failure of ['upstream', 'network']) {
+          const zh = language === 'zh-CN'
+          let attempts = 0
+          const view = accountView(language, async (_url, init) => {
+            if (init?.method !== 'POST') return clientReply(accountStatus)
+            if (++attempts === 1) {
+              if (failure === 'network') throw new Error('raw network details')
+              return clientReply({ code: 'upstream', error: '原始中文服务错误' }, false)
+            }
+            return clientReply({ apiKeys: [] })
+          })
+          await view.flush()
+          const text = view.text()
+          assert.ok(text.includes(failure === 'network' ? (zh ? '检查网络' : 'Check your connection')
+            : (zh ? '暂时无法读取' : 'temporarily unavailable')))
+          assert.ok(!text.includes('raw network details') && !text.includes('原始中文服务错误'))
+          assert.ok(!text.includes(zh ? '正在读取' : 'Loading the keys'))
+          assert.ok(!text.includes(zh ? '还没有 API Key' : 'no API keys yet'), 'failed is not empty')
+          const retry = view.button(zh ? '刷新列表' : 'Refresh list')
+          assert.equal(retry.props.disabled, false)
+          retry.props.onClick()
+          await view.flush()
+          assert.equal(attempts, 2)
+          assert.ok(view.text().includes(zh ? '还没有 API Key' : 'no API keys yet'))
+          assert.ok(!view.text().includes(zh ? '请稍后重试' : 'Please retry later'))
+        }
+      }
+    })
+
+    test('account expiry without a verified model key does not promise continued use', async () => {
+      for (const language of ['zh-CN', 'en-US']) {
+        const view = accountView(language, async () => clientReply({ ...accountStatus,
+          signedIn: false, authenticated: false, sessionExpired: true, user: null }))
+        await view.flush()
+        assert.ok(view.text().includes(language === 'zh-CN' ? '请重新登录以配置' : 'Sign in again to configure'))
+        assert.ok(!view.text().includes(language === 'zh-CN' ? '可以继续' : 'still try using models'))
+      }
+    })
+
+    test('copying and switching account keys also handle session expiry', async () => {
+      for (const action of ['revealApiKey', 'useApiKey']) {
+        const view = accountView('en-US', async (_url, init) => {
+          if (init?.method !== 'POST') return clientReply(accountStatus)
+          const body = JSON.parse(init.body)
+          if (body.action === 'listApiKeys') return clientReply({ apiKeys: [{ id: 1, name: 'laptop', masked: 'sk-…1234', enabled: true }] })
+          assert.equal(body.action, action)
+          return clientReply({ code: 'session_expired', error: 'Unauthorized', status: { ...accountStatus,
+            signedIn: false, sessionExpired: true, user: null } }, false)
+        })
+        await view.flush()
+        if (action === 'useApiKey') view.button('Use').props.onClick()
+        else {
+          // Icon-only copy button is found by its accessible label.
+          // The harness searches children for ordinary controls.
+          view.buttonByTitle('Copy').props.onClick()
+        }
+        await view.flush()
+        assert.ok(view.text().includes('Account sign-in is no longer valid'))
+        assert.equal(view.button('Sign in again').props.disabled, false)
+        assert.equal(view.reloaded, false)
+      }
+    })
+
+    test('startup gate explains expiry in the app language without changing admission rules', async () => {
+      for (const language of ['zh', 'en']) {
+        function element(tag) {
+          return { tag, textContent: '', children: [], style: {}, events: {}, attributes: {},
+            appendChild(child) { child.parent = this; this.children.push(child) },
+            replaceChildren() { this.children = [] },
+            setAttribute(key, value) { this.attributes[key] = value },
+            addEventListener(key, fn) { this.events[key] = fn },
+            remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this) },
+          }
+        }
+        const body = element('body')
+        const document = { body, documentElement: { lang: '', style: {} }, createElement: element,
+          getElementById: () => null }
+        const { gate } = client('', 'en-US', { document, fetch: async (_url, init) => init?.method === 'POST'
+          ? clientReply({ code: 'session_expired', error: '原始中文失效信息', locale: language }, false)
+          : clientReply({ ...accountStatus, signedIn: false, sessionExpired: true, locale: language }) })
+        const dispose = gate.registerLoginGate()
+        for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve))
+        const flatten = node => [node, ...node.children.flatMap(flatten)]
+        const nodes = () => body.children.flatMap(flatten)
+        const text = () => nodes().map(node => node.textContent).join('\n')
+        assert.ok(text().includes(language === 'zh' ? '账户登录已失效' : 'Your account sign-in is no longer valid'))
+        assert.equal(body.children.length, 1, 'a retained key alone must not bypass the existing startup gate')
+        const login = nodes().find(node => node.tag === 'button' && node.textContent === gate.labels().login)
+        assert.ok(login)
+        login.events.click()
+        for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve))
+        assert.ok(text().includes(language === 'zh' ? '请重新登录' : 'Please sign in to TokensAPI again'))
+        assert.ok(!text().includes('原始中文失效信息'))
+        if (language === 'en') assert.ok(!/[\u3400-\u9fff]/u.test(text()))
+        dispose()
+        assert.equal(body.children.length, 0)
+      }
+    })
 
     test('client language tables have matching nonempty translated user-visible labels', () => {
       const { gate, document } = client('zh-CN')

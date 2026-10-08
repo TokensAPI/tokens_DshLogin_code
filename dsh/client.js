@@ -55,6 +55,7 @@ window.__ModuleLoader__.load({
             checking: '正在检查登录状态…',
             missing: '请输入 API Key',
             keyWarnPrefix: '已登录，但 API Key 配置未完成：',
+            sessionExpired: '账户登录已失效，可能是在其他设备重新授权。请重新登录 TokensAPI 账号。',
           }
         : {
             title: 'Sign in to TokensAPI',
@@ -69,6 +70,7 @@ window.__ModuleLoader__.load({
             checking: 'Checking sign-in status…',
             missing: 'Please enter an API key',
             keyWarnPrefix: 'Signed in, but the API key setup did not finish: ',
+            sessionExpired: 'Your account sign-in is no longer valid, possibly after authorization on another device. Please sign in to TokensAPI again.',
           }
     }
 
@@ -100,6 +102,16 @@ window.__ModuleLoader__.load({
             copied: '已复制',
             use: '使用',
             switching: '正在切换…',
+            sessionExpired: '账户登录已失效',
+            signInAgain: '重新登录',
+            sessionExpiredHint: '可能是在其他设备重新授权。查看或切换账户中的 API Key，需要重新登录。',
+            keyRetainedHint: '已保存的模型 API Key 未被清除，可以继续尝试使用模型；如果模型请求也提示凭证无效，请重新登录或更换 API Key。',
+            signInRequiredHint: '请重新登录以配置模型 API Key。',
+            requestFailed: '操作未完成，请重试。',
+            networkError: '无法连接 TokensAPI，请检查网络后重试。',
+            upstreamError: '暂时无法读取账户信息，请稍后重试。',
+            signinRequired: '请先登录 TokensAPI 账号。',
+            invalidKey: '模型 API Key 无效，请检查或更换后重试。',
           }
         : {
             nav: 'Account',
@@ -127,6 +139,16 @@ window.__ModuleLoader__.load({
             copied: 'Copied',
             use: 'Use',
             switching: 'Switching…',
+            sessionExpired: 'Account sign-in is no longer valid',
+            signInAgain: 'Sign in again',
+            sessionExpiredHint: 'This may happen after authorization on another device. Sign in again to view or switch API keys on your account.',
+            keyRetainedHint: 'Your saved model API key has not been removed. You can still try using models; if model requests also reject the credentials, sign in again or replace the API key.',
+            signInRequiredHint: 'Sign in again to configure a model API key.',
+            requestFailed: 'The action could not be completed. Please retry.',
+            networkError: 'Cannot connect to TokensAPI. Check your connection and retry.',
+            upstreamError: 'Account information is temporarily unavailable. Please retry later.',
+            signinRequired: 'Please sign in to your TokensAPI account first.',
+            invalidKey: 'The model API key is invalid. Check or replace it and retry.',
           }
     }
 
@@ -152,9 +174,8 @@ window.__ModuleLoader__.load({
     }
 
     // What the account page shows, kept across visits: entering the page
-    // reuses the last answer instead of asking again. Only an action on the
-    // page (sign-in, switch, refresh) updates it — and sign-out reloads the
-    // window, which empties it wholesale.
+    // renders the last answer immediately, then refreshes account status.
+    // Actions update the cache; sign-out reloads the window and empties it.
     var accountCache = { status: null, keys: null }
 
     function postAction(body) {
@@ -307,6 +328,10 @@ window.__ModuleLoader__.load({
             // send the app's so the hand-off page comes up in the same one.
             postAction({ action: 'login', locale: chinese() ? 'zh' : 'en' })
               .then(({ response, body }) => {
+                if (!response.ok && body?.code === 'session_expired') {
+                  renderLogin(labels().sessionExpired, true)
+                  return
+                }
                 if (!response.ok) throw new Error(body?.error || 'login failed')
                 if (settle(body)) return
                 renderLogin(body?.apiKeyError ? t.keyWarnPrefix + body.apiKeyError : '', true)
@@ -403,7 +428,7 @@ window.__ModuleLoader__.load({
           if (!response.ok) throw new Error(body?.error || 'status unavailable')
           if (settle(body)) return
           canSignIn = body?.canSignIn === true
-          if (canSignIn) renderLogin('', false)
+          if (canSignIn) renderLogin(body?.sessionExpired ? labels().sessionExpired : '', body?.sessionExpired === true)
           else renderApiKey('', false)
         })
         .catch((error) => {
@@ -515,6 +540,9 @@ window.__ModuleLoader__.load({
         // see, and hiding one drops it again — nothing is kept around.
         var keysPair = react.useState(accountCache.keys)
         var keysErrorPair = react.useState('')
+        var keysLoadingPair = react.useState(false)
+        var keysRequest = react.useRef(0)
+        var statusRequest = react.useRef(0)
         var copiedPair = react.useState(null)
         // Which row 「使用」 was clicked, so only that button says switching.
         var switchTargetPair = react.useState(null)
@@ -524,31 +552,66 @@ window.__ModuleLoader__.load({
         var t = accountLabels()
 
         react.useEffect(() => {
-          if (accountCache.status !== null) return undefined
           var alive = true
+          var request = ++statusRequest.current
           fetch(ROUTE, { cache: 'no-store' })
             .then((response) => response.json().then((body) => ({ response: response, body: rememberLocale(body) })))
             .then(({ response, body }) => {
-              if (!response.ok) return
+              if (!response.ok || !alive || request !== statusRequest.current) return
               accountCache.status = body
               if (alive) statePair[1](body)
             })
             .catch(() => {})
           return () => {
             alive = false
+            keysRequest.current++
+            statusRequest.current++
           }
         }, [])
 
+        var errorMessage = (code) => {
+          if (code === 'session_expired') return t.sessionExpired
+          if (code === 'signin_required') return t.signinRequired
+          if (code === 'unreachable') return t.networkError
+          if (code === 'upstream') return t.upstreamError
+          if (code === 'invalid_key') return t.invalidKey
+          return t.requestFailed
+        }
+        var acceptFailure = (body) => {
+          if ((body?.code === 'session_expired' || body?.code === 'signin_required') && body?.status) {
+            statusRequest.current++
+            accountCache.status = body.status
+            accountCache.keys = null
+            statePair[1](body.status)
+            keysPair[1](null)
+            keysRequest.current++
+            keysLoadingPair[1](false)
+          }
+          return errorMessage(body?.code)
+        }
+
         var loadKeys = () => {
+          var request = ++keysRequest.current
           keysErrorPair[1]('')
+          keysLoadingPair[1](true)
           postAction({ action: 'listApiKeys' })
             .then(({ response, body }) => {
-              if (!response.ok) throw new Error(body?.error || 'request failed')
+              if (request !== keysRequest.current) return
+              if (!response.ok) {
+                acceptFailure(body)
+                keysErrorPair[1](body?.code || 'request_failed')
+                return
+              }
               var keys = Array.isArray(body?.apiKeys) ? body.apiKeys : []
               accountCache.keys = keys
               keysPair[1](keys)
             })
-            .catch((error) => keysErrorPair[1](String(error?.message || error)))
+            .catch(() => {
+              if (request === keysRequest.current) keysErrorPair[1]('unreachable')
+            })
+            .finally(() => {
+              if (request === keysRequest.current) keysLoadingPair[1](false)
+            })
         }
 
         var run = (kind, body) => {
@@ -560,11 +623,17 @@ window.__ModuleLoader__.load({
               busyPair[1]('')
               if (!response.ok) {
                 erroredPair[1](true)
-                notePair[1](String(result?.error || 'request failed'))
+                notePair[1](acceptFailure(result))
                 return
               }
+              statusRequest.current++
               accountCache.status = result
               statePair[1](result)
+              if (kind === 'login') {
+                accountCache.keys = null
+                keysPair[1](null)
+                keysErrorPair[1]('')
+              }
               // Signing out must put the gate back in front of the shell.
               // Reloading is the whole of it: the plugin remounts, the status
               // now says unauthenticated, and the gate blocks fail-closed.
@@ -580,12 +649,12 @@ window.__ModuleLoader__.load({
               notePair[1](t.done)
               // Which key is in use may have just changed. After a sign-in the
               // list loads on its own, when signedIn flips.
-              if (kind !== 'login') loadKeys()
+              if (kind !== 'login' || state?.signedIn === true) loadKeys()
             })
-            .catch((error) => {
+            .catch(() => {
               busyPair[1]('')
               erroredPair[1](true)
-              notePair[1](String(error?.message || error))
+              notePair[1](t.networkError)
             })
         }
 
@@ -596,7 +665,12 @@ window.__ModuleLoader__.load({
           // An empty list is worth asking about again: the account may have
           // been filled since, and a cached [] would hide it until 「刷新列表」.
           if (signedIn && (keysPair[0] === null || keysPair[0].length === 0)) loadKeys()
-          else if (!signedIn) keysPair[1](null)
+          else if (!signedIn) {
+            keysRequest.current++
+            keysPair[1](null)
+            accountCache.keys = null
+            keysLoadingPair[1](false)
+          }
         }, [signedIn])
 
         var authenticated = state?.authenticated === true
@@ -614,27 +688,31 @@ window.__ModuleLoader__.load({
         var copyKey = (which, text) => {
           copyText(text).then(
             () => markCopied(which),
-            (error) => keysErrorPair[1](String(error?.message || error)),
+            () => keysErrorPair[1]('request_failed'),
           )
         }
         // Copy a listed key: fetched for this copy alone, never shown.
         var copyRow = (item) => {
           postAction({ action: 'revealApiKey', id: item.id })
             .then(({ response, body }) => {
-              if (!response.ok) throw new Error(body?.error || 'request failed')
+              if (!response.ok) {
+                acceptFailure(body)
+                keysErrorPair[1](body?.code || 'request_failed')
+                return
+              }
               copyKey(item.id, String(body?.apiKey || ''))
             })
-            .catch((error) => keysErrorPair[1](String(error?.message || error)))
+            .catch(() => keysErrorPair[1]('unreachable'))
         }
 
         var who = state?.user?.displayName || state?.user?.username || ''
-        var accountValue = signedIn ? (who ? t.signedIn + ' · ' + who : t.signedIn) : t.signedOut
+        var accountValue = signedIn ? (who ? t.signedIn + ' · ' + who : t.signedIn) : state?.sessionExpired ? t.sessionExpired : t.signedOut
         // The same single door as the gate.
         var accountControls = signedIn
           ? action(t.signOut, () => run('logout', { action: 'logout' }), busy !== '')
           : state?.canSignIn !== true
             ? h('div', { style: { color: 'var(--dsw-alias-label-secondary, #666)' } }, t.browserUnavailable)
-            : action(busy === 'login' ? t.signingIn : t.signIn, () => run('login', { action: 'login' }), busy !== '', true)
+            : action(busy === 'login' ? t.signingIn : state?.sessionExpired ? t.signInAgain : t.signIn, () => run('login', { action: 'login', locale: chinese() ? 'zh' : 'en' }), busy !== '', true)
 
         var muted = 'var(--dsw-alias-label-secondary, #666)'
         var keyRow = (item) => {
@@ -718,13 +796,15 @@ window.__ModuleLoader__.load({
               'div',
               { style: { marginTop: 16 } },
               keysErrorPair[0]
-                ? h('div', { style: { color: 'var(--dsw-alias-state-error-primary, #b91c1c)' } }, keysErrorPair[0])
+                ? h('div', { role: 'alert', style: { color: 'var(--dsw-alias-state-error-primary, #b91c1c)' } }, errorMessage(keysErrorPair[0]))
                 : null,
-              keysPair[0] === null
+              keysLoadingPair[0]
                 ? h('div', { style: { color: muted } }, t.keysLoading)
-                : keysPair[0].length === 0
-                  ? h('div', { style: { color: muted } }, t.keysEmpty)
-                  : keysPair[0].map(keyRow),
+                : keysPair[0] === null
+                  ? null
+                  : keysPair[0].length === 0
+                    ? h('div', { style: { color: muted } }, t.keysEmpty)
+                    : keysPair[0].map(keyRow),
             )
 
         // Below the list: the one remaining account-wide action.
@@ -733,7 +813,7 @@ window.__ModuleLoader__.load({
               'div',
               { style: { marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--dsw-alias-border-l2, #eee)' } },
               action(
-                keysPair[0] === null ? t.refreshing : t.refresh,
+                keysLoadingPair[0] ? t.refreshing : t.refresh,
                 () => {
                   // A list refresh and nothing else: the key in use is not
                   // touched — switching keys is what 「使用」 is for.
@@ -741,7 +821,7 @@ window.__ModuleLoader__.load({
                   accountCache.keys = null
                   loadKeys()
                 },
-                busy !== '' || keysPair[0] === null,
+                busy !== '' || keysLoadingPair[0],
               ),
             )
           : null
@@ -765,6 +845,11 @@ window.__ModuleLoader__.load({
                 },
                 note,
               )
+            : null,
+          state?.sessionExpired
+            ? h('div', { role: 'alert', style: { marginBottom: 16, lineHeight: 1.6 } },
+                h('div', undefined, t.sessionExpiredHint),
+                h('div', undefined, authenticated ? t.keyRetainedHint : t.signInRequiredHint))
             : null,
           row(t.account, accountValue, accountControls, signedIn ? t.signOutHint : ''),
           row(

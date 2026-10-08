@@ -53,7 +53,7 @@ const runtimes = new WeakMap()
 function loginRuntime(ctx) {
   let runtime = runtimes.get(ctx)
   if (!runtime) {
-    runtime = { desktopRuntime: null, user: null, loginInFlight: null, loginTarget: '', sessionCheck: null }
+    runtime = { desktopRuntime: null, user: null, loginInFlight: null, loginTarget: '', sessionCheck: null, sessionExpired: false }
     runtimes.set(ctx, runtime)
   }
   return runtime
@@ -178,7 +178,41 @@ async function consoleFetch(site, path, { method = 'GET', body, accessToken, use
   } catch {
     parsed = null
   }
-  return { status: response.status, body: parsed }
+  const result = { status: response.status, body: parsed }
+  // Some new-api deployments reject an account token with HTTP 200. Confirm
+  // ambiguous business failures against /user/self, never guess from wording.
+  // A failed confirmation (offline/5xx/HTML) is not proof of expiry.
+  if (accessToken && path !== '/api/user/self') {
+    let rejected = response.status === 401 || response.status === 403
+    if (!rejected && parsed?.success === false) {
+      let self
+      try {
+        self = await consoleFetch(site, '/api/user/self', { accessToken, userId })
+      } catch {
+        self = null
+      }
+      rejected = self !== null && sessionRejected(self)
+    }
+    if (rejected) {
+      const error = new LoginError('session_expired', '账户登录已失效，请重新登录')
+      // Internal only: compare against the current session before clearing it.
+      error.accessToken = accessToken
+      throw error
+    }
+  }
+  return result
+}
+
+function sessionRejected(response) {
+  return response.status === 401 || response.status === 403 || response.body?.success === false
+}
+
+async function expireSession(ctx, runtime, accessToken) {
+  const current = resolvedValue(await ctx.credentials.resolve(TOKENS_LOGIN.accessTokenRef))
+  if (current !== accessToken) return false
+  await logout(ctx, runtime)
+  runtime.sessionExpired = true
+  return true
 }
 
 /**
@@ -286,13 +320,20 @@ function loopbackCallback(state, timeoutMs) {
 /**
  * The browser hands back an id and a token, not a profile. Ask the console for
  * the display name so the account row reads like a name rather than a number;
- * failing that is cosmetic and never fatal to the sign-in.
+ * unavailable profile data is cosmetic, but a definite token rejection must
+ * not be displayed as a successful sign-in.
  */
 async function describeUser(settings, accessToken, userId) {
   try {
     const self = await consoleFetch(settings.site, '/api/user/self', { accessToken, userId })
+    if (sessionRejected(self)) {
+      const error = new LoginError('session_expired', '账户登录已失效，请重新登录')
+      error.accessToken = accessToken
+      throw error
+    }
     return self.body?.success === true ? self.body.data : null
-  } catch {
+  } catch (error) {
+    if (error?.code === 'session_expired') throw error
     return null
   }
 }
@@ -326,14 +367,11 @@ async function verifySession(ctx, runtime, settings, accessToken, userId) {
   // The console does not always speak in status codes: this deployment
   // answers a bad token with 200 + {success:false, "Unauthorized…"}. Any
   // coherent answer that refuses to identify the bearer is a rejection.
-  if (self.status === 401 || self.status === 403 || self.body?.success === false) {
+  if (sessionRejected(self)) {
     // Sign-in may have raced this check and stored a fresh session. A late
     // rejection only ever speaks for the token it was issued against, so it
     // may clear nothing unless that token is still the one on file.
-    const current = resolvedValue(await ctx.credentials.resolve(TOKENS_LOGIN.accessTokenRef))
-    if (current !== accessToken) return true
-    await logout(ctx, runtime)
-    return false
+    return !(await expireSession(ctx, runtime, accessToken))
   }
   // An incoherent answer (404, HTML instead of JSON): not proof of a dead
   // session, but not a profile either. Keep the claim, ask again later.
@@ -386,6 +424,8 @@ async function signIn(ctx, runtime, settings, locale) {
   }
   await ctx.credentials.set(TOKENS_LOGIN.accessTokenRef, accessToken)
   await ctx.credentials.set(TOKENS_LOGIN.userIdRef, `${userId}`)
+  runtime.sessionExpired = false
+  runtime.sessionCheck = null
   const user = await describeUser(settings, accessToken, userId)
   runtime.user = {
     id: userId,
@@ -396,6 +436,7 @@ async function signIn(ctx, runtime, settings, locale) {
     await ensureApiKey(ctx, settings, { accessToken, userId })
     return ''
   } catch (error) {
+    if (error?.code === 'session_expired') throw error
     return String(error?.message ?? error)
   }
 }
@@ -471,6 +512,7 @@ async function setApiKey(ctx, settings, body) {
 async function logout(ctx, runtime) {
   runtime.user = null
   runtime.sessionCheck = null
+  runtime.sessionExpired = false
   for (const ref of [TOKENS_LOGIN.accessTokenRef, TOKENS_LOGIN.userIdRef]) {
     if (typeof ctx.credentials.unset === 'function') await ctx.credentials.unset(ref)
     else await ctx.credentials.set(ref, '')
@@ -591,6 +633,7 @@ async function loginStatus(ctx, runtime, settings) {
     site: settings.site,
     authenticated: await storedApiKeyAuthenticated(ctx),
     signedIn,
+    sessionExpired: runtime.sessionExpired,
     user: runtime.user,
     canSignIn: externalBrowser(ctx) !== null,
     // The gate mounts before the locale plugin sets <html lang>, so the app's
@@ -629,6 +672,7 @@ function isTrustedRequest(req) {
 }
 
 function errorStatus(code) {
+  if (code === 'session_expired') return 401
   if (code === 'invalid_key') return 401
   if (code === 'unreachable') return 503
   if (code === 'upstream') return 502
@@ -695,7 +739,23 @@ function registerLoginRoute(scope, host, settings) {
           ...(await loginStatus(host, runtime, settings)),
         })
       } catch (error) {
-        const code = typeof error?.code === 'string' ? error.code : 'invalid_input'
+        let code = typeof error?.code === 'string' ? error.code : 'invalid_input'
+        if (code === 'signin_required') {
+          if (runtime.sessionExpired) code = 'session_expired'
+          send(errorStatus(code), { error: code === 'session_expired' ? '账户登录已失效，请重新登录' : '请先登录 TokensAPI 账号',
+            code, status: await loginStatus(host, runtime, settings) })
+          return
+        }
+        if (code === 'session_expired') {
+          if (await expireSession(host, runtime, error.accessToken)) {
+            send(401, { error: '账户登录已失效，请重新登录', code, status: await loginStatus(host, runtime, settings) })
+            return
+          }
+          // A newer browser authorization won the race; do not report it expired.
+          code = 'upstream'
+          send(errorStatus(code), { error: '账户信息已更新，请重试', code })
+          return
+        }
         send(errorStatus(code), { error: String(error?.message ?? error), code })
       }
     },

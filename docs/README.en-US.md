@@ -67,6 +67,15 @@ state**. Neither decides the other: the gate appears based on the session alone,
 and downstream plugins look only for a usable `sk-` key. Signing out clears the
 session only — the key and its verification marker are left in place.
 
+When an account request definitively rejects the session, Settings shows a
+localized sign-in-expired notice and a **Sign in again** action. Authorization on
+another device is described as a possible cause, not a certainty. The saved model
+API key and verification marker stay intact; the page does not force a reload or
+interrupt current use. Keeping a key does not prove that it remains valid: if model
+requests also reject it, sign in again or replace it. Ordinary list/network errors
+stop loading and allow a retry without clearing the account session. Startup gate
+and explicit sign-out rules are unchanged.
+
 ## Configuration (`cordis.patch.yml` → `config`)
 
 | Key | Default | Meaning |

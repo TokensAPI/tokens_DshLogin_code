@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Report rejected account sessions with localized re-sign-in guidance while
+  retaining model credentials and avoiding a forced page reload.
+- End failed API-key list loading and restore retry controls; confirm ambiguous
+  console failures without mistaking network or business errors for expiry.
+- Cover account action failures, fresh-login races and bilingual recovery in the
+  existing functional case inventory and runner.
+
 ## 0.1.6
 
 - Add bilingual market metadata and Chinese primary documentation.
