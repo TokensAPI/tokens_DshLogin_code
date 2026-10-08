@@ -2,13 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
-## Unreleased
+## 0.1.6
 
 - Add bilingual market metadata and Chinese primary documentation.
 - Make releases tag-only and gate publication on the complete Node LTS matrix.
 - Stop publication on Registry query errors; verify published metadata and tarball integrity.
 - Add a CSV functional case inventory and real credential-provider restart tests.
-- Synchronize the lockfile with the existing 0.1.5 version.
+- Synchronize the package manifest, lockfile and release version.
+
+[0.1.6](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.5...v0.1.6)
 
 ## 0.1.5
 
