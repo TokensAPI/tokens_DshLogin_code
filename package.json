@@ -4,8 +4,9 @@
     "description": "TokensAPI account sign-in for DeepSeek Harness Desktop: log in with the TokensAPI account system (password, Google/OAuth, wallet), then provision the API key automatically for the managed model plugins",
     "type": "module",
     "scripts": {
-        "test": "node --test",
-        "check": "node --test",
+        "test": "npm run test:cases",
+        "test:cases": "node test/run-test-cases.mjs",
+        "check": "npm run test:cases",
         "prepack": "npm run check"
     },
     "files": [
@@ -13,6 +14,7 @@
         "cordis.patch.yml",
         "README.md",
         "README.zh-CN.md",
+        "docs/README.en-US.md",
         "CHANGELOG.md",
         "LICENSE"
     ],
@@ -37,7 +39,14 @@
         "registry": "https://npm.tokensapi.ai/"
     },
     "engines": {
-        "node": ">=22.19"
+        "node": "^22.19.0 || ^24.0.0"
+    },
+    "tokenscowork": {
+        "displayName": { "zh-CN": "TokensAPI 账户", "en-US": "TokensAPI Account" },
+        "summary": {
+            "zh-CN": "通过浏览器登录 TokensAPI 账户，自动配置 API Key 供模型插件共用。",
+            "en-US": "Sign in to your TokensAPI account in the browser and automatically configure an API key for model plugins."
+        }
     },
     "exports": {
         ".": "./dsh/index.js",
@@ -54,5 +63,14 @@
             "platform": "web",
             "immediately": true
         }
+    },
+    "devDependencies": {
+        "@deepseek-ai/cordis": "4.0.2",
+        "@deepseek-ai/dsh-atomic-write": "0.1.5-rc.2",
+        "@deepseek-ai/dsh-credentials": "0.1.5-rc.2",
+        "@deepseek-ai/dsh-credentials-local": "0.1.5-rc.2",
+        "@deepseek-ai/dsh-home-paths": "0.1.5-rc.2",
+        "@deepseek-ai/dsh-launch-environment": "0.1.5-rc.2",
+        "yaml": "2.9.0"
     }
 }

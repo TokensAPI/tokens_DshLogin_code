@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+- Add bilingual market metadata and Chinese primary documentation.
+- Make releases tag-only and gate publication on the complete Node LTS matrix.
+- Stop publication on Registry query errors; verify published metadata and tarball integrity.
+- Add a CSV functional case inventory and real credential-provider restart tests.
+- Synchronize the lockfile with the existing 0.1.5 version.
+
+## 0.1.5
+
+- Match the stored API key against the signed-in account's key list; replace
+  foreign keys on sign-in and when opening the account page, creating a key
+  automatically when the account has none.
+- Retry loading an empty cached key list when revisiting the account page.
+
+[0.1.5](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.4...v0.1.5)
+
 ## 0.1.4
 
 - "Refresh" on the account page now only reloads the key list; it never
@@ -61,3 +78,8 @@ First release.
   it, enter one manually, and list the account's keys with on-demand reveal.
 - Sign-in state and the API key are kept independent — signing out clears the
   session only and leaves the key working for downstream plugins.
+
+[0.1.4](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.3...v0.1.4)
+[0.1.3](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.2...v0.1.3)
+[0.1.2](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.0...v0.1.2)
+[0.1.0](https://github.com/TokensAPI/tokens_DshLogin_code/tree/v0.1.0)

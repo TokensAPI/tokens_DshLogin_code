@@ -4,15 +4,19 @@
 //
 // 本包没有构建步骤：dsh/*.js 即产物，"可运行"就等于"能被 import 起来"。
 import { execFileSync } from 'node:child_process';
-import { readdirSync, rmSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { validateRelease } from './validate-release.mjs';
 
 const REQUIRED = [
   'package/package.json',
   'package/cordis.patch.yml',
   'package/dsh/index.js',
   'package/dsh/client.js',
+  'package/README.md',
+  'package/docs/README.en-US.md',
+  'package/LICENSE',
 ];
 
 // Git Bash 的 GNU tar 会把 `C:\...` 当成 `host:path`，所以一律
@@ -37,6 +41,19 @@ export async function verifyPackage(tarball) {
 
   rmSync(join(dir, 'package'), { recursive: true, force: true });
   tar(['-xzf', file], dir);
+  const manifest = JSON.parse(readFileSync(join(dir, 'package', 'package.json'), 'utf8'));
+  validateRelease(manifest, `v${manifest.version}`);
+  for (const entry of Object.values(manifest.exports)) {
+    if (typeof entry !== 'string' || !entry.startsWith('./') || !listing.includes('package/' + entry.slice(2))) {
+      throw new Error('Packed export does not point to an included resource');
+    }
+  }
+  for (const key of ['displayName', 'summary']) {
+    const labels = manifest.tokenscowork?.[key];
+    if (!labels?.['zh-CN']?.trim() || !labels?.['en-US']?.trim() || labels['zh-CN'] === labels['en-US']) {
+      throw new Error('Packed bilingual market metadata is missing or untranslated');
+    }
+  }
   const module = await import(pathToFileURL(join(dir, 'package', 'dsh', 'index.js')).href);
   for (const exported of ['name', 'apply', 'TOKENS_LOGIN']) {
     if (module[exported] === undefined) throw new Error(`Packed entry does not export ${exported}`);

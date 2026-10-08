@@ -1,96 +1,71 @@
-name: Verify and Publish to Private npm
+name: Publish to Private npm
 
-# 分工：ci.yml 跑 Node 版本矩阵的功能检查；本工作流只管发布这条路——
-# 在 main 上先把产物打出来验一遍，推 v* 标签时再发。
+# needs cannot cross workflow files. Repeat the checks matrix so publication
+# is gated by checks from this same tag run, not an earlier branch run.
 on:
-  workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 'Existing stable tag to publish (leave empty for checks only)'
-        required: false
-        type: string
   push:
-    branches:
-      - main
-    tags:
-      - 'v*'
+    tags: ['v*']
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ inputs.release_tag && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  PRIVATE_REGISTRY: https://npm.tokensapi.ai/
-  PACKAGE_NAME: '@tokensapi/dsh-login'
-  APPROVED_PUBLISHER: tokenscowork
-
 jobs:
-  release:
-    name: Verify package and publish
+  check:
+    strategy:
+      matrix:
+        # Covers engines: Node 22 (minimum 22.19.0) and Node 24 LTS.
+        node: [22.19.0, 24]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          # 手动重试时检出指定标签本身，而不是 main 的当前头。
-          ref: ${{ inputs.release_tag || github.ref }}
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org/
+      - run: npm run check
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+  publish:
+    needs: check
+    if: github.repository == 'TokensAPI/tokens_DshLogin_code' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
           registry-url: https://npm.tokensapi.ai/
-
-      # 先于安装、且完全离线：标签和 package.json 对不上就没必要往下走。
       - name: Validate release identity
-        if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-        env:
-          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
-        run: node scripts/validate-release.mjs "$RELEASE_TAG"
-
-      # 本包零依赖，但 setup-node 已把私有源写进 .npmrc（那是发布方向）。
-      # 安装方向显式指回公共源，免得装依赖时去敲私有源。
-      - name: Install dependencies
-        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org/
-
-      - name: Run checks
-        run: npm run check
-
-      # 没有构建步骤，dsh/*.js 即产物；"可运行"由解包后真的 import 一次来证明。
-      - name: Pack release artifact
+        run: node scripts/validate-release.mjs "$GITHUB_REF_NAME"
+      # dsh/*.js are hand-written runtime assets; there is no build step.
+      # The matrix already ran prepack's checks, so skip them when packing.
+      - name: Pack and verify release artifact
         run: |
           mkdir -p .release
           npm pack --ignore-scripts --pack-destination .release
-
-      - name: Verify packed artifact
-        run: node scripts/verify-package.mjs .release
-
-      - name: Publish to private registry
-        if: github.repository == 'TokensAPI/tokens_DshLogin_code' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')) || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+          node scripts/verify-package.mjs .release
+      - name: Publish verified artifact and verify registry
         env:
           NODE_AUTH_TOKEN: ${{ secrets.VERDACCIO_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::缺少仓库 Secret VERDACCIO_PUBLISH_TOKEN，无法发布到 $PRIVATE_REGISTRY。请在 Settings → Secrets and variables → Actions 添加后重试。"
+            echo "::error::缺少仓库 Secret VERDACCIO_PUBLISH_TOKEN"
             exit 1
           fi
-          publisher="$(npm whoami --registry="$PRIVATE_REGISTRY")"
-          if [ "$publisher" != "$APPROVED_PUBLISHER" ]; then
-            echo "::error::发布账号是 $publisher，期望 $APPROVED_PUBLISHER。请更换 Secret 中的令牌。"
+          publisher="$(npm whoami --registry=https://npm.tokensapi.ai/)"
+          if [ "$publisher" != "tokenscowork" ]; then
+            echo "::error::发布账号必须是 tokenscowork"
             exit 1
           fi
-          version="$(node -p "require('./package.json').version")"
-          # 覆盖已发布版本会让已装到机器上的内容与版本号对不上，直接拒绝。
-          if npm view "$PACKAGE_NAME@$version" version --registry="$PRIVATE_REGISTRY" >/dev/null 2>&1; then
-            echo "::error::$PACKAGE_NAME@$version 已存在于 $PRIVATE_REGISTRY，拒绝覆盖。请改用新版本号。"
-            exit 1
-          fi
-          tarball="$(ls .release/*.tgz)"
-          npm publish "$tarball" --registry="$PRIVATE_REGISTRY" --access restricted
-          echo "Published $PACKAGE_NAME@$version to $PRIVATE_REGISTRY"
+          node scripts/registry-release.mjs preflight
+          npm publish .release/*.tgz --ignore-scripts --registry=https://npm.tokensapi.ai/ --tag latest
+          node scripts/registry-release.mjs verify .release

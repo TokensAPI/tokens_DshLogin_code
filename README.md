@@ -1,92 +1,70 @@
-# @tokensapi/dsh-login — TokensAPI sign-in for TokensCowork Desktop
+# TokensAPI 账户登录插件
 
-Sign in to TokensCowork Desktop with a TokensAPI (new-api) **account** instead of
-pasting an API key by hand.
+通过系统浏览器登录 TokensAPI（new-api）账号，自动配置 API Key，供 TokensCowork 模型插件共用。
 
-[中文文档](./README.zh-CN.md)
+[English](docs/README.en-US.md) · [发布说明](docs/publishing.md)
 
-## How it works
+## 使用与宿主要求
 
-The startup gate offers a single door: **sign in to your TokensAPI account**. The
-plugin opens a one-shot callback listener on `127.0.0.1` and hands
-`/desktop-auth?port=…&state=…` to the system's default browser. Everything the
-browser already has works there — wallet extensions, passkeys, an existing
-session. Once the user authorizes, the site returns an access token and account
-id to that loopback port.
+当前 TokensCowork 产品将本插件作为内置组件打包；是否内置、启用及版本以产品清单为准，独立 npm 发布不会自动更新桌面产品。包名为 `@tokensapi/dsh-login`，发布源为 `https://npm.tokensapi.ai/`。
 
-An embedded sign-in window was removed: it cannot host wallet extensions or
-passkeys, while the browser runs every method the site offers, so keeping it
-meant maintaining two code paths.
+需要宿主提供 `credentials`、`webServer` 和 `desktopRuntime.openExternal`。支持 Node 22（至少 22.19.0）与 Node 24。缺少浏览器桥时门禁退回手动 API Key。仅在支持可选安装且未内置此包的宿主中，通过其插件管理器安装；无需自行执行安装脚本。
 
-After the loopback receives the session:
+## 登录与重启
 
-1. store the long-lived access token and account id issued by the site;
-2. look for an API key on the account (`GET /api/token/`), creating one named
-   `TokensCowork` when none exists, and read back the full `sk-` key;
-3. verify it with `GET /v1/models` and write it to the credential plane, so
-   downstream plugins such as the model manager work with no changes.
+1. 点击“登录 TokensAPI 账号”，在系统浏览器完成站点登录并确认授权。
+2. 站点通过一次性 `127.0.0.1` 回调交回 access token 和用户 ID，插件调用宿主凭证服务保存。
+3. 查询账号的 Key 列表，复用可用 Key；没有时默认创建一把 `TokensCowork`，取明文并验证后保存。
 
-A manual "use an API key instead" entry stays on the gate as a fallback. A
-manually submitted key that passes verification admits the user immediately, but
-it does **not** replace sign-in on the next launch — unless the host cannot open
-a browser (`canSignIn` is false), where the manual key is the only way in.
+账号登录没有插件自设的固定有效期。正常重启会读取已保存会话，并通过 `/api/user/self` 验证；暂时断网保留会话，明确拒绝才清除。站点重新签发 access token 会使旧值失效，包括在另一设备重新授权。
 
-The door's capability comes from the desktop shell: `desktopRuntime.openExternal`
-(HTTPS only, plus HTTP for loopback). Hosts without it fall back to manual key
-entry automatically.
+“改用 API Key 临时登录”仅在当前页面放行；它不建立账号会话，下一次启动可能再次显示登录门禁。API Key 本身会保留。注销只清 access token 和用户 ID，模型流量 Key 与验证标记保留。
 
-## Site-side requirement
+## 账户管理
 
-Browser sign-in needs a handshake page on the site: `desktop-auth` in new-api's
-web app. That page:
+设置中的“账户管理”显示账号与其 Key 列表。Key 始终掩码显示，复制按钮按需取明文直接写剪贴板，“使用”按钮切换当前 Key。“刷新列表”重新读取列表；若当前 Key 属于该账号，保持选择。发现外来 Key 或无可用 Key 时会自动认领或创建，不要求用户点创建。空列表在下次进入页面时重新加载。
 
-- accepts only `port` (an integer in 1024–65535) and `state` (an opaque nonce)
-  and **never a URL** — the callback target is fixed in-page as
-  `http://127.0.0.1:{port}/callback`;
-- opens the site's own sign-in dialog in place when signed out, so `port` and
-  `state` survive;
-- requires an **explicit authorization** before calling `GET /api/user/token`.
-  That endpoint **re-issues** the token, invalidating the previous one, which
-  the page states.
+## 配置
 
-The loopback listener binds `127.0.0.1` only, on a random port, accepts exactly
-one request, and waits at most 5 minutes. `state` is a 128-bit random value; a
-mismatch is answered with 403.
+在 `cordis.patch.yml` 的 `config` 配置：
 
-## Credential references
-
-| Reference | Contents |
-| --- | --- |
-| `TOKENSAPI_API_KEY` | the relay `sk-` key used for model traffic |
-| `TOKENSAPI_API_KEY_VERIFIED_SHA256` | `sha256:<hex>` verification marker |
-| `TOKENSAPI_ACCESS_TOKEN` | console access token (`Authorization` header) |
-| `TOKENSAPI_USER_ID` | numeric account id (required `New-Api-User` header) |
-
-The first two are **downstream traffic credentials**; the last two are **sign-in
-state**. Neither decides the other: the gate appears based on the session alone,
-and downstream plugins look only for a usable `sk-` key. Signing out clears the
-session only — the key and its verification marker are left in place.
-
-## Configuration (`cordis.patch.yml` → `config`)
-
-| Key | Default | Meaning |
+| 键 | 默认值 | 用途 |
 | --- | --- | --- |
-| `site` | `https://tokensapi.ai` | deployed site origin (HTTPS; loopback may use HTTP) |
-| `desktopAuthPath` | `/desktop-auth` | in-site path of the handshake page |
-| `tokenName` | `TokensCowork` | name of the API key to reuse or create |
-| `autoCreateApiKey` | `true` | create a key when the account has none |
+| site | https://tokensapi.ai | 站点 origin，HTTPS；本机回环可 HTTP |
+| desktopAuthPath | /desktop-auth | 站内交握页路径 |
+| tokenName | TokensCowork | 优先复用或自动创建的 Key 名称 |
+| autoCreateApiKey | true | 账户无可用 Key 时自动创建 |
 
-## Tests
+站点必须部署 `/desktop-auth` 交握页，复用站点登录并要求明确授权。只接收 port/state，回调目标固定为本机；OAuth 登录往返须保留交握页路径。回环监听使用随机端口和 128 位 nonce，等待最多 5 分钟；这不是登录有效期。
 
-```bash
+## 凭证契约
+
+| 引用 | 内容 |
+| --- | --- |
+| TOKENSAPI_ACCESS_TOKEN | 账号 access token |
+| TOKENSAPI_USER_ID | 数字用户 ID，随请求发送 New-Api-User 头 |
+| TOKENSAPI_API_KEY | 模型流量 Key |
+| TOKENSAPI_API_KEY_VERIFIED_SHA256 | sha256 指纹验证标记 |
+
+会话决定登录门禁；模型插件读取后两项。插件使用宿主凭证服务，不自行读写用户凭证文件。界面文案已有中文和英文，市场双语元数据须随下一次 npm 发布后才能生效。
+
+## 开发与测试
+
+```sh
+npm ci --ignore-scripts
 npm test
+# 同一功能用例入口：
+npm run test:cases
 ```
 
-## Publishing
+- [功能用例清单](test/test_cases.csv)：逐条列出前置条件、步骤、预期与对应测试。
+- [执行器](test/run-test-cases.mjs)：校验映射并执行；跳过、缺失或失败均不算通过。
+- [登录功能测试](test/host.test.mjs)、[真实凭证持久化测试](test/persistence.test.mjs)、[界面语言测试](test/client.test.mjs)、[发布与产物测试](test/release-config.test.mjs)。
 
-Releases go to the self-hosted registry `https://npm.tokensapi.ai/`, published by GitHub Actions
-when a `v*` tag is pushed. See [docs/publishing.md](docs/publishing.md).
+真实凭证测试使用固定版 `@deepseek-ai/dsh-credentials-local@0.1.5-rc.2` 与 Cordis 4.0.2，模拟两次独立启动，只操作临时目录和假凭证。网络、系统浏览器仍是模拟边界；没有自动重启用户应用，也没有验证真实站点 OAuth 或界面视觉。
 
-## License
+## 发布与许可
 
-MIT
+仅推送 `v*` 标签发布；版本号、标签和 CHANGELOG 必须一致。失败重试使用 Actions 的 Re-run。详见[发布说明](docs/publishing.md)。
+
+MIT。

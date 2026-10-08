@@ -12,6 +12,12 @@ export function validateRelease(manifest, tag) {
   if (manifest.name !== PACKAGE_NAME) {
     throw new Error(`Unexpected release package name: ${manifest.name}`)
   }
+  const repository = new URL((manifest.repository?.url ?? '').replace(/^git\+/u, ''))
+  if (repository.protocol !== 'https:' || repository.hostname !== 'github.com'
+      || repository.pathname.replace(/\.git$/u, '') !== '/TokensAPI/tokens_DshLogin_code'
+      || repository.username || repository.password || repository.search || repository.hash) {
+    throw new Error('Unexpected release repository identity')
+  }
   // 私有源是硬要求：publishConfig 缺失或指向 npmjs 时一律拒绝，
   // 避免把插件发到公共 registry —— 公共源上的版本收不回来。
   if (manifest.publishConfig?.registry !== REGISTRY || manifest.publishConfig?.access === 'public') {
@@ -30,5 +36,9 @@ export function validateRelease(manifest, tag) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
   const version = validateRelease(manifest, process.argv[2])
+  const changelog = readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8')
+  if (!changelog.split(/\r?\n/u).includes(`## ${version}`)) {
+    throw new Error(`CHANGELOG.md must contain a section for ${version}`)
+  }
   console.log(`Validated ${manifest.name}@${version} for ${REGISTRY}`)
 }
