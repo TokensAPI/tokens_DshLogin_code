@@ -59,7 +59,7 @@ npm run test:cases
 
 - [功能用例清单](test/test_cases.csv)：逐条列出前置条件、步骤、预期与对应测试。
 - [执行器](test/run-test-cases.mjs)：校验映射并执行；跳过、缺失或失败均不算通过。
-- [登录功能测试](test/host.test.mjs)、[真实凭证持久化测试](test/persistence.test.mjs)、[界面语言测试](test/client.test.mjs)、[发布与产物测试](test/release-config.test.mjs)。
+- 测试目录仅保留[用例清单](test/test_cases.csv)和[统一执行器](test/run-test-cases.mjs)。登录、真实凭证跨进程恢复、界面语言、发布与产物的断言均在执行器内实现。
 
 真实凭证测试使用固定版 `@deepseek-ai/dsh-credentials-local@0.1.5-rc.2` 与 Cordis 4.0.2，模拟两次独立启动，只操作临时目录和假凭证。网络、系统浏览器仍是模拟边界；没有自动重启用户应用，也没有验证真实站点 OAuth 或界面视觉。
 

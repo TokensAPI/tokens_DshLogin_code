@@ -79,7 +79,9 @@ session only — the key and its verification marker are left in place.
 ## Tests
 
 The functional inventory is [test/test_cases.csv](../test/test_cases.csv), run by
-[test/run-test-cases.mjs](../test/run-test-cases.mjs). Missing, skipped or failed
+[test/run-test-cases.mjs](../test/run-test-cases.mjs). These are the only two test
+files; all assertions and credential child-process helpers live in the runner.
+Missing, skipped or failed
 tests cannot count as passed cases. Tests include Cordis 4.0.2 and the actual
 file credential provider 0.1.5-rc.2 in independent processes using temporary
 directories and fake credentials; browser and network effects are simulated.
