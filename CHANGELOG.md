@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.1.8
+
+- Clarify in Chinese and English that API-key sign-in lasts only for the current
+  app launch and requires verification again after quitting; recommend account
+  sign-in to stay signed in.
+- Leave sign-in, verification and credential storage behavior unchanged.
+
+[0.1.8](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.7...v0.1.8)
+
 ## 0.1.7
 
 - Report rejected account sessions with localized re-sign-in guidance while
