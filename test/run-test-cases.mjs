@@ -918,9 +918,20 @@ function registerCases() {
       assert.equal(workflow.jobs.publish.needs, 'check')
       assert.equal(workflow.jobs.publish.if, "github.repository == 'TokensAPI/tokens_DshLogin_code' && startsWith(github.ref, 'refs/tags/v')")
       assert.equal(workflow.concurrency['cancel-in-progress'], false)
+      const packageCheck = workflow.jobs['package-check']
+      assert.equal(packageCheck.needs, 'publish')
+      const checker = packageCheck.uses.match(/^TokensAPI\/tokens_DshPluginCheck_code\/\.github\/workflows\/check-plugin-package\.yml@([a-f0-9]{40})$/u)
+      assert.ok(checker, '包检查必须调用固定提交的公共流程')
+      assert.deepEqual(packageCheck.with, { package: '${{ needs.publish.outputs.package }}', checker_ref: checker[1] })
+      assert.deepEqual(packageCheck.secrets, { PLUGIN_CHECK_REGISTRY_TOKEN: '${{ secrets.PLUGIN_CHECK_REGISTRY_TOKEN }}' })
       for (const config of [checks, workflow]) {
         assert.deepEqual(config.permissions, { contents: 'read' })
         for (const job of Object.values(config.jobs)) {
+          if (job.uses) {
+            assert.equal(job, packageCheck)
+            assert.equal(job.steps, undefined)
+            continue
+          }
           const checkout = job.steps.find(step => step.uses?.startsWith('actions/checkout'))
           assert.equal(checkout.with['persist-credentials'], false)
         }
@@ -935,9 +946,15 @@ function registerCases() {
       const setup = steps.find(step => step.uses?.startsWith('actions/setup-node'))
       assert.equal(setup.with['registry-url'], manifest.publishConfig.registry)
       const authenticated = steps.filter(step => step.env?.NODE_AUTH_TOKEN)
-      assert.equal(authenticated.length, 1)
-      assert.equal(authenticated[0].env.NODE_AUTH_TOKEN, '${{ secrets.VERDACCIO_PUBLISH_TOKEN }}')
-      const command = authenticated[0].run
+      assert.equal(authenticated.length, 2)
+      const publisher = authenticated.find(step => step.env.NODE_AUTH_TOKEN === '${{ secrets.VERDACCIO_PUBLISH_TOKEN }}')
+      const inspection = authenticated.find(step => step.env.NODE_AUTH_TOKEN === '${{ secrets.PLUGIN_CHECK_REGISTRY_TOKEN }}')
+      assert.ok(publisher && inspection)
+      assert.ok(steps.indexOf(inspection) < steps.indexOf(publisher))
+      assert.match(inspection.run, /NODE_AUTH_TOKEN:-/u)
+      assert.match(inspection.run, /npm whoami.*== market/u)
+      assert.doesNotMatch(inspection.run, /npm publish/u)
+      const command = publisher.run
       assert.ok(command.includes('npm whoami --registry=https://npm.tokensapi.ai/'))
       assert.ok(command.includes('tokenscowork'))
       assert.ok(command.includes('缺少仓库 Secret VERDACCIO_PUBLISH_TOKEN'))
@@ -945,6 +962,9 @@ function registerCases() {
       assert.ok(command.indexOf('registry-release.mjs preflight') < command.indexOf('npm publish'))
       assert.ok(command.indexOf('registry-release.mjs verify') > command.indexOf('npm publish'))
       assert.ok(steps.some(step => step.run?.includes('npm pack --ignore-scripts --pack-destination .release')))
+      const output = steps.find(step => step.id === 'package')
+      assert.ok(steps.indexOf(output) > steps.indexOf(publisher))
+      assert.equal(workflow.jobs.publish.outputs.package, '${{ steps.package.outputs.package }}')
     })
 
     test('registry preflight permits only a confirmed absent version', async () => {
