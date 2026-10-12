@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## 0.1.9
+## 0.1.10
 
 - Replace the sidebar-foot account menu with a TokensAPI one: registered in the
   `settings.launcher` slot at priority -10 so the upstream DeepSeek menu is
@@ -12,8 +12,17 @@ All notable changes to this project are documented in this file.
 - Offer **Settings** (with its shortcut), plus **Sign out** with confirmation or
   **Sign in** through the existing browser sign-in; no feedback entry.
 - Share one account state between the menu and the Account settings page.
+- Run the post-publish package check only when the read-only
+  `PLUGIN_CHECK_REGISTRY_TOKEN` secret is configured; without it the release
+  warns and continues instead of failing before publishing. A configured
+  secret must still belong to the `market` account.
 
-[0.1.9](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.8...v0.1.9)
+[0.1.10](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.8...v0.1.10)
+
+## 0.1.9
+
+- Tagged but never published: the release stopped before publishing because the
+  package-check secret was not configured. Its changes ship in 0.1.10.
 
 ## 0.1.8
 
