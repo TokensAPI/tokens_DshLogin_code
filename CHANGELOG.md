@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.1.11
+
+- Show sign-in and API-key errors in the app's language. The sign-in page, the
+  API key page, Account settings and the sidebar menu now map the host's error
+  code (`unreachable`, `upstream`, `invalid_key`, `session_expired`,
+  `browser_unavailable`, `cancelled`, `no_api_key`, `invalid_input`,
+  `signin_required`) to localized text, and use a localized generic message for
+  unknown codes. The host's fixed Chinese messages are no longer shown.
+- Pass the error code of a failed API-key setup after browser sign-in
+  (`apiKeyErrorCode`), which was previously sent as message text only.
+- Re-render an error already on the sign-in gate when the app language changes.
+- Announce a failed sign-in from the sidebar menu instead of failing silently.
+
+[0.1.11](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.10...v0.1.11)
+
 ## 0.1.10
 
 - Replace the sidebar-foot account menu with a TokensAPI one: registered in the
