@@ -1045,7 +1045,7 @@ function registerCases() {
 
   // 中英文界面行为
   {
-    function client(language = '', browserLanguage = 'en-US', environment = {}) {
+    function client(language = '', browserLanguage = 'en-US', environment = {}, requireModule = () => { throw new Error('No dependencies needed for labels') }) {
       let registration
       const document = environment.document ?? { documentElement: { lang: language } }
       runInNewContext(readFileSync(new URL('../dsh/client.js', import.meta.url), 'utf8'), {
@@ -1054,17 +1054,27 @@ function registerCases() {
         navigator: { language: browserLanguage },
         ...environment,
       })
-      return { gate: registration.factory(() => { throw new Error('No dependencies needed for labels') }).__gate, document }
+      return { gate: registration.factory(requireModule).__gate, document }
     }
 
-    // Deterministic hook harness: executes the real component, request promises,
-    // effect dependencies and rendered button handlers, without a desktop/DOM.
-    function accountView(language, request) {
+    // One client instance with a fake host route; components mounted on the
+    // same session share the plugin's module state, as they do in the app.
+    function clientSession(language, request) {
       let reloaded = false
       const { gate } = client(language, 'en-US', {
         fetch: request, setTimeout, location: { reload: () => { reloaded = true } },
         navigator: { language: 'en-US', clipboard: { writeText: async () => {} } },
       })
+      return { gate, get reloaded() { return reloaded } }
+    }
+
+    function accountView(language, request) {
+      return mount(clientSession(language, request), (gate, react) => gate.AccountSection(react))
+    }
+
+    // Deterministic hook harness: executes the real component, request promises,
+    // effect dependencies and rendered button handlers, without a desktop/DOM.
+    function mount(session, make, props = {}) {
       const hooks = []
       let cursor = 0, dirty = true, tree, pendingEffects = []
       const react = {
@@ -1091,12 +1101,12 @@ function registerCases() {
           }
         },
       }
-      const Component = gate.AccountSection(react)
+      const Component = make(session.gate, react)
       function render() {
         for (let attempts = 0; dirty; attempts++) {
           assert.ok(attempts < 30, 'component must settle without a render loop')
           dirty = false; cursor = 0
-          tree = Component()
+          tree = Component(props)
           const effects = pendingEffects; pendingEffects = []
           for (const effect of effects) effect()
         }
@@ -1108,7 +1118,13 @@ function registerCases() {
         text() { return flatten(tree).filter(value => typeof value === 'string').join('\n') },
         button(label) { return flatten(tree).find(value => value?.type === 'button' && value.children.includes(label)) },
         buttonByTitle(label) { return flatten(tree).find(value => value?.type === 'button' && value.props.title === label) },
-        get reloaded() { return reloaded },
+        find(predicate) { return flatten(tree).find(value => value && typeof value === 'object' && predicate(value)) },
+        menuItems() {
+          return flatten(tree).filter(value => value?.props?.role === 'menuitem')
+            .map(item => ({ item, text: flatten(item.children).filter(value => typeof value === 'string').join(' ') }))
+        },
+        setProps(next) { Object.assign(props, next); dirty = true },
+        get reloaded() { return session.reloaded },
       }
     }
 
@@ -1251,9 +1267,133 @@ function registerCases() {
       }
     })
 
+    test('account launcher replaces the upstream sidebar menu through settings.launcher', () => {
+      for (const withPortal of [true, false]) {
+        const react = { createElement: () => null }
+        const { gate } = client('en-US', 'en-US', { console: { error: message => assert.fail(message) } }, name => {
+          if (name === 'react') return react
+          if (name === 'react-dom' && withPortal) return { createPortal: node => node }
+          throw new Error(`unexpected module ${name}`)
+        })
+        const injected = [], registered = []
+        const slots = {
+          inject(name, install) { injected.push(name); install() },
+          register(options, component) { registered.push({ options, component }); return () => {} },
+        }
+        gate.registerAccountLauncher({ inject(deps, install) { assert.deepEqual([...deps], ['slots']); install({ slots }) } })
+        assert.deepEqual(injected, ['settings.launcher'])
+        assert.equal(registered.length, 1)
+        // Single slot, lowest priority renders; upstream sits at the default 0.
+        assert.deepEqual({ ...registered[0].options }, { name: 'settings.launcher', priority: -10 })
+        assert.ok(gate.LAUNCHER_PRIORITY < 0)
+        assert.equal(typeof registered[0].component, 'function')
+      }
+    })
+
+    function launcherView(session, props = {}) {
+      return mount(session, (gate, react) => gate.AccountLauncher(react, null), {
+        wide: true, settingsOpen: false, openSettings() {}, openOnboarding() {}, ...props })
+    }
+
+    test('account launcher shows the signed-in account and signs out after confirmation', async () => {
+      for (const language of ['zh-CN', 'en-US']) {
+        const zh = language === 'zh-CN'
+        const posts = []
+        let opened = 0
+        const session = clientSession(language, async (_url, init) => {
+          if (init?.method !== 'POST') return clientReply({ ...accountStatus, user: { username: 'alice', displayName: 'Alice Chen' } })
+          posts.push(JSON.parse(init.body).action)
+          return clientReply({ ...accountStatus, signedIn: false, user: null })
+        })
+        const t = session.gate.launcherLabels()
+        const view = launcherView(session, { openSettings: () => { opened++ },
+          settingsShortcut: { keys: ['Ctrl', ','], aria: 'Control+Comma' } })
+        await view.flush()
+        const trigger = () => view.find(node => node.props['aria-label'] === t.menu)
+        assert.ok(view.text().includes('Alice Chen'))
+        assert.ok(view.text().split('\n').includes('A'), 'initial stands in for the missing avatar')
+        assert.equal(trigger().props['data-signed-out'], false)
+        trigger().props.onClick()
+        await view.flush()
+        const items = view.menuItems()
+        assert.deepEqual(items.map(entry => entry.item.props.key), ['settings', 'signout'])
+        assert.ok(items[0].text.startsWith(zh ? '设置' : 'Settings') && items[0].text.includes('Ctrl'))
+        assert.equal(items[1].text, zh ? '退出登录' : 'Sign out')
+        assert.equal(items[0].item.props['aria-keyshortcuts'], 'Control+Comma')
+        assert.ok(!/feedback|contact|反馈|联系/iu.test(view.text()))
+
+        items[0].item.props.onClick()
+        await view.flush()
+        assert.equal(opened, 1)
+        assert.equal(view.menuItems().length, 0, 'choosing a row closes the menu')
+
+        trigger().props.onClick()
+        await view.flush()
+        view.menuItems()[1].item.props.onClick()
+        await view.flush()
+        assert.ok(view.text().includes(session.gate.accountLabels().signOutHint))
+        view.find(node => node.type === 'button' && node.children.includes(t.cancel)).props.onClick()
+        await view.flush()
+        assert.ok(!view.text().includes(session.gate.accountLabels().signOutHint))
+        assert.deepEqual(posts, [], 'nothing is signed out before confirmation')
+
+        trigger().props.onClick()
+        await view.flush()
+        view.menuItems()[1].item.props.onClick()
+        await view.flush()
+        view.find(node => node.type === 'button' && node.props.className?.includes('tkl-primary')).props.onClick()
+        await view.flush()
+        assert.deepEqual(posts, ['logout'])
+        assert.equal(session.reloaded, true, 'sign-out reloads so the gate returns, as in Settings')
+      }
+    })
+
+    test('account launcher signs in from the menu and shares account state with Settings', async () => {
+      for (const language of ['zh-CN', 'en-US']) {
+        const zh = language === 'zh-CN'
+        let signedIn = false, loginBody
+        const status = () => signedIn
+          ? { ...accountStatus, user: { username: 'bob', displayName: '' } }
+          : { ...accountStatus, signedIn: false, user: null }
+        const session = clientSession(language, async (_url, init) => {
+          if (init?.method !== 'POST') return clientReply(status())
+          const body = JSON.parse(init.body)
+          if (body.action === 'listApiKeys') return clientReply({ apiKeys: [] })
+          assert.equal(body.action, 'login')
+          loginBody = body
+          signedIn = true
+          return clientReply(status())
+        })
+        const t = session.gate.launcherLabels()
+        const launcher = launcherView(session)
+        const settings = mount(session, (gate, react) => gate.AccountSection(react))
+        await launcher.flush()
+        await settings.flush()
+        const trigger = () => launcher.find(node => node.props['aria-label'] === t.menu)
+        assert.ok(launcher.text().includes(t.more))
+        assert.equal(trigger().props['data-signed-out'], true)
+        trigger().props.onClick()
+        await launcher.flush()
+        assert.deepEqual(launcher.menuItems().map(entry => entry.text), [t.settings, t.signIn])
+        launcher.menuItems()[1].item.props.onClick()
+        await launcher.flush()
+        await settings.flush()
+        assert.equal(loginBody.locale, zh ? 'zh' : 'en')
+        assert.ok(launcher.text().includes('bob'))
+        assert.ok(!launcher.text().includes(t.more))
+        assert.ok(settings.text().includes((zh ? '已登录' : 'Signed in') + ' · bob'), 'Settings follows the menu sign-in')
+
+        launcher.setProps({ wide: false })
+        await launcher.flush()
+        assert.equal(trigger().props['data-collapsed'], true)
+        assert.equal(trigger().props.title, 'bob')
+        assert.ok(!launcher.text().split('\n').includes('bob'), 'collapsed sidebar shows the icon only')
+      }
+    })
+
     test('client language tables have matching nonempty translated user-visible labels', () => {
       const { gate, document } = client('zh-CN')
-      for (const name of ['labels', 'accountLabels']) {
+      for (const name of ['labels', 'accountLabels', 'launcherLabels']) {
         const zh = gate[name]()
         document.documentElement.lang = 'en-US'
         const en = gate[name]()

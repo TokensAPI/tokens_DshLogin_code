@@ -152,6 +152,35 @@ window.__ModuleLoader__.load({
           }
     }
 
+    /** The sidebar account menu; wording follows the upstream menu it replaces. */
+    function launcherLabels() {
+      return chinese()
+        ? {
+            menu: '账号菜单',
+            more: '更多',
+            signedIn: '已登录 TokensAPI',
+            settings: '设置',
+            signIn: '登录',
+            signingIn: '请在浏览器中完成登录…',
+            signOut: '退出登录',
+            signOutTitle: '退出 TokensAPI 账号',
+            signOutFailed: '退出登录未完成，请重试。',
+            cancel: '取消',
+          }
+        : {
+            menu: 'Account menu',
+            more: 'More',
+            signedIn: 'Signed in to TokensAPI',
+            settings: 'Settings',
+            signIn: 'Sign in',
+            signingIn: 'Finish signing in in your browser…',
+            signOut: 'Sign out',
+            signOutTitle: 'Sign out of TokensAPI',
+            signOutFailed: 'Sign-out did not finish. Please retry.',
+            cancel: 'Cancel',
+          }
+    }
+
     /** Clipboard with the execCommand fallback for non-secure contexts. */
     function copyText(text) {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -177,6 +206,32 @@ window.__ModuleLoader__.load({
     // renders the last answer immediately, then refreshes account status.
     // Actions update the cache; sign-out reloads the window and empties it.
     var accountCache = { status: null, keys: null }
+
+    // The account page and the sidebar launcher show one account: every
+    // status either of them receives goes through publishStatus, and each
+    // follows the other's sign-in or expiry without a refetch.
+    var statusListeners = []
+
+    function publishStatus(status) {
+      accountCache.status = status
+      statusListeners.slice().forEach((listener) => listener(status))
+    }
+
+    function subscribeStatus(listener) {
+      statusListeners.push(listener)
+      return () => {
+        statusListeners = statusListeners.filter((item) => item !== listener)
+      }
+    }
+
+    function refreshStatus() {
+      return fetch(ROUTE, { cache: 'no-store' })
+        .then((response) => response.json().then((body) => ({ response: response, body: rememberLocale(body) })))
+        .then(({ response, body }) => {
+          if (response.ok) publishStatus(body)
+        })
+        .catch(() => {})
+    }
 
     function postAction(body) {
       return fetch(ROUTE, {
@@ -551,6 +606,8 @@ window.__ModuleLoader__.load({
         var busy = busyPair[0]
         var t = accountLabels()
 
+        react.useEffect(() => subscribeStatus((status) => statePair[1](status)), [])
+
         react.useEffect(() => {
           var alive = true
           var request = ++statusRequest.current
@@ -558,8 +615,7 @@ window.__ModuleLoader__.load({
             .then((response) => response.json().then((body) => ({ response: response, body: rememberLocale(body) })))
             .then(({ response, body }) => {
               if (!response.ok || !alive || request !== statusRequest.current) return
-              accountCache.status = body
-              if (alive) statePair[1](body)
+              publishStatus(body)
             })
             .catch(() => {})
           return () => {
@@ -580,9 +636,8 @@ window.__ModuleLoader__.load({
         var acceptFailure = (body) => {
           if ((body?.code === 'session_expired' || body?.code === 'signin_required') && body?.status) {
             statusRequest.current++
-            accountCache.status = body.status
             accountCache.keys = null
-            statePair[1](body.status)
+            publishStatus(body.status)
             keysPair[1](null)
             keysRequest.current++
             keysLoadingPair[1](false)
@@ -627,8 +682,7 @@ window.__ModuleLoader__.load({
                 return
               }
               statusRequest.current++
-              accountCache.status = result
-              statePair[1](result)
+              publishStatus(result)
               if (kind === 'login') {
                 accountCache.keys = null
                 keysPair[1](null)
@@ -886,9 +940,380 @@ window.__ModuleLoader__.load({
       })
     }
 
+    // The sidebar-foot account menu. `settings.launcher` is a single slot whose
+    // lowest priority renders; the upstream DeepSeek menu sits at the default
+    // 0, so registering below it replaces that menu without touching its
+    // package.
+    var LAUNCHER_SLOT = 'settings.launcher'
+    var LAUNCHER_PRIORITY = -10
+
+    // Markup and styles copied from the host's Menu, MenuSurface, Modal and
+    // Button primitives and the upstream account menu, under our own class
+    // prefix: a plain-JS plugin must not load host UI packages as modules, so
+    // the --dsw-alias-* tokens are the only thing shared with the host.
+    var LAUNCHER_CSS = [
+      '.tkl-root{flex:1;min-width:0;position:relative}',
+      '.tkl-trigger{user-select:none;box-sizing:border-box;border-radius:var(--dsw-radius-md);width:100%;height:44px;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;cursor:pointer;background:0 0;border:0;align-items:center;gap:8px;padding:6px;display:flex}',
+      '.tkl-trigger[data-collapsed=true]{justify-content:center;gap:0;width:36px;height:36px;padding:0}',
+      '.tkl-trigger[data-signed-out=true]:not([data-collapsed=true]){height:32px;padding:6px 2px 6px 6px;line-height:20px}',
+      '.tkl-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.tkl-avatar{background:var(--dsw-alias-bg-skeleton);width:24px;height:24px;color:var(--dsw-alias-label-tertiary);border-radius:50%;flex:none;justify-content:center;align-items:center;display:flex;font-size:12px;font-weight:600;line-height:1}',
+      '.tkl-label{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}',
+      '.tkl-list{box-sizing:border-box;position:fixed;z-index:1100;display:flex;flex-direction:column;padding:4px;min-width:144px;max-width:360px;border:0;border-radius:var(--dsw-radius-lg);isolation:isolate;--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent)}',
+      '.tkl-list[data-inline=true]{position:absolute;left:0;bottom:calc(100% + 4px);z-index:100}',
+      '.tkl-list[data-signed-out=true]{min-width:124px;max-width:280px}',
+      '.tkl-material{position:absolute;inset:0;z-index:-1;border-radius:inherit;background:var(--dsw-menu-surface-fill);backdrop-filter:var(--dsw-menu-backdrop-filter);pointer-events:none}',
+      '.tkl-item{display:flex;align-items:center;gap:6px;width:100%;min-height:34px;padding:6px 8px;border:none;border-radius:var(--dsw-radius-md);background:transparent;cursor:pointer;font:inherit;font-size:13px;line-height:20px;color:var(--dsw-alias-label-primary);text-align:left}',
+      '.tkl-list[data-signed-out=true] .tkl-item{gap:8px;min-height:40px;padding:8px 10px;font-size:14px;line-height:22px}',
+      '.tkl-item:hover:not(:disabled),.tkl-item:focus-visible:not(:disabled){background:var(--dsw-alias-interactive-bg-hover);outline:none}',
+      '.tkl-item:disabled{opacity:.4;cursor:not-allowed}',
+      '.tkl-icon{display:inline-flex;flex:none;width:14px;height:14px;align-items:center;justify-content:center;color:var(--dsw-alias-menu-icon)}',
+      '.tkl-icon svg{width:14px;height:14px}',
+      '.tkl-list[data-signed-out=true] .tkl-icon,.tkl-list[data-signed-out=true] .tkl-icon svg{width:16px;height:16px}',
+      '.tkl-itemLabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.tkl-keys{flex:none;margin-inline-start:auto;display:inline-flex;align-items:center;gap:3px;color:var(--dsw-alias-label-caption);font-size:11px;line-height:16px;white-space:nowrap}',
+      '.tkl-modal{pointer-events:auto;position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:max(24px,var(--dsh-frame-overlay-top,24px)) 24px}',
+      '.tkl-mask{position:absolute;inset:var(--dsh-frame-chrome-top,0px) 0 0;backdrop-filter:var(--dsw-mask-blur);background:var(--dsw-alias-bg-mask-1)}',
+      '.tkl-dialog{box-sizing:border-box;position:relative;z-index:1;display:flex;flex-direction:column;gap:20px;width:min(380px,100%);padding:0 0 24px;overflow:hidden;border-radius:var(--dsw-radius-panel);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent)}',
+      '.tkl-dialog:focus{outline:none}',
+      '.tkl-title{margin:0;padding:22px 24px 0;font-size:16px;line-height:24px;font-weight:500;color:var(--dsw-alias-label-primary)}',
+      '.tkl-description{margin:0;padding:0 24px;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary)}',
+      '.tkl-description[role=alert]{color:var(--dsw-alias-state-error-primary)}',
+      '.tkl-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 24px}',
+      '.tkl-button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;height:36px;padding:0 14px;border:none;border-radius:var(--dsw-radius-md);font:inherit;font-size:14px;line-height:22px;cursor:pointer;color:var(--dsw-alias-label-primary);background:transparent}',
+      '.tkl-button:disabled{cursor:not-allowed;opacity:.4}',
+      '.tkl-outline{border:.5px solid var(--dsw-alias-border-l3)}',
+      '.tkl-outline:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
+      '.tkl-primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}',
+      '.tkl-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}',
+    ].join('\n')
+
+    /**
+     * The launcher component. `reactDom` portals the list and the dialog to
+     * document.body, as the upstream menu does, so the sidebar's overflow
+     * cannot crop them; without it both render in place.
+     */
+    function AccountLauncher(react, reactDom) {
+      var h = react.createElement
+      var useLayout = react.useLayoutEffect || react.useEffect
+      var portal = (node) => (reactDom && typeof reactDom.createPortal === 'function' && document.body ? reactDom.createPortal(node, document.body) : node)
+      var svg = (size, children) =>
+        h('svg', { width: size, height: size, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': true, strokeWidth: 1.3 }, children)
+      var icons = {
+        settings: () =>
+          svg(16, [
+            h('path', { key: 'a', stroke: 'currentColor', d: 'M8 9.75012C8.9665 9.75012 9.75 8.96662 9.75 8.00012C9.75 7.03362 8.9665 6.25012 8 6.25012C7.0335 6.25012 6.25 7.03362 6.25 8.00012C6.25 8.96662 7.0335 9.75012 8 9.75012Z' }),
+            h('path', {
+              key: 'b',
+              stroke: 'currentColor',
+              strokeMiterlimit: 10,
+              d: 'M13.0107 7.79377C12.9505 7.89401 12.9205 7.94413 12.9205 7.99951C12.9205 8.0549 12.9505 8.10502 13.0106 8.20528L13.9849 9.83006C14.045 9.93029 14.0751 9.9804 14.0751 10.0358C14.0751 10.0911 14.045 10.1413 13.9849 10.2415L13.0037 11.8777C12.9468 11.9726 12.9184 12.0201 12.8725 12.0461C12.8267 12.072 12.7713 12.072 12.6607 12.072H10.6704C10.5598 12.072 10.5045 12.072 10.4586 12.098C10.4128 12.1239 10.3843 12.1714 10.3274 12.2662L9.33825 13.9142C9.28133 14.009 9.25287 14.0564 9.20703 14.0823C9.16118 14.1083 9.10588 14.1083 8.99529 14.1083H7.00486C6.89426 14.1083 6.83896 14.1083 6.79312 14.0823C6.74727 14.0564 6.71881 14.009 6.6619 13.9142L5.67273 12.2662C5.61581 12.1714 5.58735 12.1239 5.54151 12.098C5.49566 12.072 5.44036 12.072 5.32977 12.072H3.33945C3.2288 12.072 3.17347 12.072 3.12761 12.0461C3.08176 12.0201 3.0533 11.9726 2.9964 11.8777L2.0152 10.2415C1.9551 10.1413 1.92505 10.0911 1.92505 10.0358C1.92505 9.9804 1.9551 9.93029 2.0152 9.83006L2.98951 8.20528C3.04963 8.10502 3.07969 8.0549 3.07969 7.99951C3.07968 7.94413 3.04961 7.89401 2.98946 7.79377L2.01529 6.17011C1.95514 6.06987 1.92507 6.01975 1.92507 5.96437C1.92506 5.90899 1.95512 5.85886 2.01524 5.7586L2.9964 4.1224C3.0533 4.0275 3.08176 3.98005 3.12761 3.95408C3.17347 3.92811 3.2288 3.92811 3.33945 3.92811H5.32977C5.44036 3.92811 5.49566 3.92811 5.54151 3.90216C5.58735 3.87621 5.61581 3.82879 5.67273 3.73397L6.6619 2.08599C6.71881 1.99116 6.74727 1.94375 6.79312 1.9178C6.83896 1.89185 6.89426 1.89185 7.00486 1.89185H8.99529C9.10588 1.89185 9.16118 1.89185 9.20703 1.9178C9.25287 1.94375 9.28133 1.99116 9.33825 2.08599L10.3274 3.73397C10.3843 3.82879 10.4128 3.87621 10.4586 3.90216C10.5045 3.92811 10.5598 3.92811 10.6704 3.92811H12.6607C12.7713 3.92811 12.8267 3.92811 12.8725 3.95408C12.9184 3.98005 12.9468 4.0275 13.0037 4.1224L13.9849 5.7586C14.045 5.85886 14.0751 5.90899 14.0751 5.96437C14.0751 6.01975 14.045 6.06987 13.9849 6.17011L13.0107 7.79377Z',
+            }),
+          ]),
+        user: () =>
+          svg(16, [
+            h('path', { key: 'a', stroke: 'currentColor', d: 'M8 8.25C9.51878 8.25 10.75 7.01878 10.75 5.5C10.75 3.98122 9.51878 2.75 8 2.75C6.48122 2.75 5.25 3.98122 5.25 5.5C5.25 7.01878 6.48122 8.25 8 8.25Z' }),
+            h('path', { key: 'b', stroke: 'currentColor', d: 'M2.5 14.5C2.5 11.5 5.25 10.25 8 10.25C10.75 10.25 13.5 11.5 13.5 14.5' }),
+          ]),
+        more: () =>
+          svg(14, [
+            h('path', { key: 'a', fill: 'currentColor', d: 'M3 9C3.55228 9 4 8.55228 4 8C4 7.44772 3.55228 7 3 7C2.44772 7 2 7.44772 2 8C2 8.55228 2.44772 9 3 9Z' }),
+            h('path', { key: 'b', fill: 'currentColor', d: 'M8 9C8.55228 9 9 8.55228 9 8C9 7.44772 8.55228 7 8 7C7.44772 7 7 7.44772 7 8C7 8.55228 7.44772 9 8 9Z' }),
+            h('path', { key: 'c', fill: 'currentColor', d: 'M13 9C13.5523 9 14 8.55228 14 8C14 7.44772 13.5523 7 13 7C12.4477 7 12 7.44772 12 8C12 8.55228 12.4477 9 13 9Z' }),
+          ]),
+        signOut: () =>
+          h(
+            'svg',
+            { width: 16, height: 16, viewBox: '-1.168 -1.214 16 16', fill: 'none', 'aria-hidden': true },
+            h('path', { fill: 'currentColor', d: 'M3.9961 1.40039C3.37842 1.40039 2.96028 1.40039 2.63867 1.42871C2.32631 1.45627 2.17171 1.50666 2.06641 1.56543C1.85606 1.68288 1.68189 1.85605 1.56446 2.06641C1.50569 2.17173 1.45625 2.32627 1.42871 2.63867C1.40036 2.9603 1.39942 3.37827 1.39942 3.9961L1.39942 9.5752C1.39942 10.193 1.40036 10.611 1.42871 10.9326C1.45625 11.245 1.50569 11.3996 1.56445 11.5049C1.68188 11.7153 1.85605 11.8884 2.06641 12.0059C2.17171 12.0646 2.32631 12.115 2.63867 12.1426C2.96028 12.1709 3.37842 12.1709 3.9961 12.1709V13.5713C3.4033 13.5713 2.91297 13.5721 2.51563 13.5371C2.10906 13.5013 1.73277 13.4233 1.38379 13.2285C0.946838 12.9845 0.585697 12.6235 0.341799 12.1865C0.14725 11.8377 0.0700118 11.4621 0.0341815 11.0557C-0.000847399 10.6583 1.58129e-06 10.1681 1.85029e-06 9.5752L2.09416e-06 3.9961C1.83027e-06 3.40325 -0.000846367 2.91297 0.0341818 2.51563C0.0700164 2.10924 0.147239 1.73362 0.341799 1.38477C0.585703 0.947758 0.946825 0.586744 1.38379 0.342775C1.73277 0.148001 2.10906 0.0700381 2.51563 0.0341813C2.91297 -0.000823893 3.40331 1.37805e-06 3.9961 1.71712e-06L3.9961 1.40039Z' }),
+            h('path', { fill: 'currentColor', d: 'M13.6426 6.51953C13.6705 6.6957 13.6705 6.8756 13.6426 7.05176C13.5902 7.38188 13.4302 7.64112 13.2539 7.86035C13.0857 8.06937 12.8546 8.29971 12.6006 8.55371L9.3086 11.8447L8.31836 10.8545L11.6104 7.56348C11.637 7.53681 11.6628 7.51104 11.6875 7.48633H3.74317V6.08594H11.6885C11.6635 6.06088 11.6374 6.03487 11.6104 6.00781L8.31836 2.7168L9.3086 1.72656L12.6006 5.01758C12.8547 5.27169 13.0857 5.50185 13.2539 5.71094C13.4303 5.93018 13.5902 6.18939 13.6426 6.51953Z' }),
+          ),
+      }
+
+      return function TokensAccountLauncher(props) {
+        var statePair = react.useState(accountCache.status)
+        var openPair = react.useState(false)
+        var confirmPair = react.useState(false)
+        var busyPair = react.useState('')
+        var failedPair = react.useState(false)
+        var placePair = react.useState(null)
+        var rootRef = react.useRef(null)
+        var listRef = react.useRef(null)
+        var triggerRef = react.useRef(null)
+        var cancelRef = react.useRef(null)
+        var settingsWasOpen = react.useRef(false)
+        var state = statePair[0]
+        var open = openPair[0]
+        var confirming = confirmPair[0]
+        var busy = busyPair[0]
+        var wide = props.wide !== false
+        var t = launcherLabels()
+
+        react.useEffect(() => subscribeStatus((status) => statePair[1](status)), [])
+        react.useEffect(() => {
+          if (accountCache.status === null) refreshStatus()
+        }, [])
+        // Entering Settings re-asks the console, as the upstream menu does: the
+        // account page is where a stale session would otherwise go unnoticed.
+        react.useEffect(() => {
+          if (props.settingsOpen === true && !settingsWasOpen.current) refreshStatus()
+          settingsWasOpen.current = props.settingsOpen === true
+        }, [props.settingsOpen])
+
+        var close = () => openPair[1](false)
+        var focusTrigger = () => triggerRef.current?.focus?.()
+
+        // Above the trigger, clamped into the viewport like the host Menu.
+        useLayout(() => {
+          if (!open || !reactDom) {
+            placePair[1](null)
+            return
+          }
+          var anchor = rootRef.current?.getBoundingClientRect?.()
+          var list = listRef.current
+          if (!anchor || !list) return
+          var margin = 12
+          var left = Math.min(Math.max(anchor.left, margin), Math.max(margin, globalThis.innerWidth - list.offsetWidth - margin))
+          var top = Math.max(margin, anchor.top - list.offsetHeight - 4)
+          placePair[1]({ left: left, top: top })
+        }, [open])
+
+        // Outside press and Escape close; the arrow keys walk the rows. The
+        // first row takes focus on open, and Escape hands it back to the
+        // trigger.
+        react.useEffect(() => {
+          if (!open || typeof document.addEventListener !== 'function') return
+          var rows = () => Array.from(listRef.current?.querySelectorAll?.('button:not(:disabled)') || [])
+          rows()[0]?.focus?.()
+          var onPointerDown = (event) => {
+            if (rootRef.current?.contains?.(event.target) || listRef.current?.contains?.(event.target)) return
+            close()
+          }
+          var onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              close()
+              focusTrigger()
+              return
+            }
+            if (['ArrowDown', 'ArrowUp', 'Home', 'End'].indexOf(event.key) < 0) return
+            var focused = document.activeElement
+            if (!rootRef.current?.contains?.(focused) && !listRef.current?.contains?.(focused)) return
+            var buttons = rows()
+            if (buttons.length === 0) return
+            var index = buttons.indexOf(document.activeElement)
+            var next =
+              event.key === 'Home'
+                ? 0
+                : event.key === 'End'
+                  ? buttons.length - 1
+                  : (index + (event.key === 'ArrowDown' ? 1 : index < 0 ? 0 : -1) + buttons.length) % buttons.length
+            event.preventDefault()
+            buttons[next].focus()
+          }
+          document.addEventListener('pointerdown', onPointerDown)
+          document.addEventListener('keydown', onKeyDown, true)
+          return () => {
+            document.removeEventListener('pointerdown', onPointerDown)
+            document.removeEventListener('keydown', onKeyDown, true)
+          }
+        }, [open])
+
+        react.useEffect(() => {
+          if (!confirming || typeof document.addEventListener !== 'function') return
+          cancelRef.current?.focus?.()
+          var onKeyDown = (event) => {
+            if (event.key !== 'Escape' || busyPair[0] === 'logout') return
+            event.preventDefault()
+            confirmPair[1](false)
+          }
+          document.addEventListener('keydown', onKeyDown, true)
+          return () => document.removeEventListener('keydown', onKeyDown, true)
+        }, [confirming])
+
+        var signedIn = state?.signedIn === true
+        var who = state?.user?.displayName || state?.user?.username || ''
+
+        // The same door as the gate and the account page: the user's own
+        // browser. A repeat click while waiting re-opens the same page.
+        var signIn = () => {
+          if (state?.canSignIn === false) {
+            // No browser hand-off in this build; the account page says so and
+            // offers the manual key instead.
+            props.openSettings?.()
+            return
+          }
+          busyPair[1]('login')
+          postAction({ action: 'login', locale: chinese() ? 'zh' : 'en' })
+            .then(({ response, body }) => {
+              if (response.ok) publishStatus(body)
+              else if (body?.status) publishStatus(body.status)
+            })
+            .catch(() => {})
+            .finally(() => busyPair[1](''))
+        }
+
+        // Sign-out is the account page's own: end the session, keep the key,
+        // and reload so the gate stands in front of the shell again.
+        var signOut = () => {
+          busyPair[1]('logout')
+          failedPair[1](false)
+          postAction({ action: 'logout' })
+            .then(({ response, body }) => {
+              if (!response.ok) throw new Error(body?.error || 'logout failed')
+              publishStatus(body)
+              globalThis.location?.reload?.()
+            })
+            .catch(() => {
+              busyPair[1]('')
+              failedPair[1](true)
+            })
+        }
+
+        var select = (id) => {
+          close()
+          if (id === 'settings') {
+            focusTrigger()
+            props.openSettings?.()
+          } else if (id === 'signin') signIn()
+          else if (id === 'signout') {
+            failedPair[1](false)
+            confirmPair[1](true)
+          }
+        }
+
+        var items = [{ id: 'settings', label: t.settings, icon: icons.settings(), shortcut: props.settingsShortcut }].concat(
+          signedIn
+            ? [{ id: 'signout', label: t.signOut, icon: icons.signOut(), disabled: busy !== '' }]
+            : [{ id: 'signin', label: busy === 'login' ? t.signingIn : t.signIn, icon: icons.user() }],
+        )
+
+        var row = (item) =>
+          h(
+            'button',
+            {
+              key: item.id,
+              type: 'button',
+              role: 'menuitem',
+              className: 'tkl-item',
+              disabled: item.disabled === true,
+              'aria-keyshortcuts': item.shortcut?.aria,
+              onClick: () => select(item.id),
+            },
+            h('span', { className: 'tkl-icon' }, item.icon),
+            h('span', { className: 'tkl-itemLabel' }, item.label),
+            item.shortcut?.keys?.length
+              ? h(
+                  'span',
+                  { className: 'tkl-keys', 'aria-hidden': true },
+                  item.shortcut.keys.map((key, index) => h('span', { key: index }, key)),
+                )
+              : null,
+          )
+
+        var list = open
+          ? portal(
+              h(
+                'div',
+                {
+                  ref: listRef,
+                  role: 'menu',
+                  className: 'tkl-list',
+                  'data-inline': reactDom ? undefined : true,
+                  'data-signed-out': signedIn ? undefined : true,
+                  style: reactDom ? placePair[0] || { visibility: 'hidden', left: 0, top: 0 } : undefined,
+                },
+                h('div', { className: 'tkl-material', 'aria-hidden': true }),
+                items.map(row),
+              ),
+            )
+          : null
+
+        var dialog = confirming
+          ? portal(
+              h(
+                'div',
+                { className: 'tkl-modal' },
+                h('div', { className: 'tkl-mask', onClick: () => busy === 'logout' || confirmPair[1](false) }),
+                h(
+                  'div',
+                  { role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'tkl-signout-title', className: 'tkl-dialog', tabIndex: -1 },
+                  h('h2', { id: 'tkl-signout-title', className: 'tkl-title' }, t.signOutTitle),
+                  h('p', { className: 'tkl-description' }, accountLabels().signOutHint),
+                  failedPair[0] ? h('p', { className: 'tkl-description', role: 'alert' }, t.signOutFailed) : null,
+                  h(
+                    'div',
+                    { className: 'tkl-actions' },
+                    h(
+                      'button',
+                      { ref: cancelRef, type: 'button', className: 'tkl-button tkl-outline', disabled: busy === 'logout', onClick: () => confirmPair[1](false) },
+                      t.cancel,
+                    ),
+                    h('button', { type: 'button', className: 'tkl-button tkl-primary', disabled: busy === 'logout', onClick: signOut }, t.signOut),
+                  ),
+                ),
+              ),
+            )
+          : null
+
+        var label = signedIn ? who || t.signedIn : t.more
+        var avatar = signedIn
+          ? h('span', { className: 'tkl-avatar' }, who ? Array.from(who)[0].toUpperCase() : icons.user())
+          : icons.more()
+
+        return h(
+          'div',
+          { ref: rootRef, className: 'tkl-root' },
+          h('style', null, LAUNCHER_CSS),
+          h(
+            'button',
+            {
+              ref: triggerRef,
+              type: 'button',
+              className: 'tkl-trigger',
+              'data-collapsed': !wide,
+              'data-signed-out': !signedIn,
+              'aria-label': t.menu,
+              'aria-haspopup': 'menu',
+              'aria-expanded': open,
+              title: wide ? undefined : label,
+              onClick: () => openPair[1]((value) => !value),
+            },
+            avatar,
+            wide ? h('span', { className: 'tkl-label' }, label) : null,
+          ),
+          list,
+          dialog,
+        )
+      }
+    }
+
+    /** Replace the upstream sidebar account menu with the TokensAPI one. */
+    function registerAccountLauncher(ctx) {
+      if (typeof ctx.inject !== 'function') return
+      ctx.inject(['slots'], (scope) => {
+        try {
+          var react = require('react')
+          var reactDom = null
+          try {
+            reactDom = require('react-dom')
+          } catch {
+            // In-place rendering still works; only overflow cropping is at risk.
+          }
+          var Launcher = AccountLauncher(react, reactDom)
+          scope.slots.inject(LAUNCHER_SLOT, () =>
+            scope.slots.register({ name: LAUNCHER_SLOT, priority: LAUNCHER_PRIORITY }, Launcher),
+          )
+        } catch (error) {
+          console.error(`[tokens-login] account launcher skipped: ${error}`)
+        }
+      })
+    }
+
     function apply(ctx) {
       var disposeGate = registerLoginGate()
       registerAccountSection(ctx)
+      registerAccountLauncher(ctx)
       // cordis effect: unregister on plugin disposal (HMR, profile reload).
       if (typeof ctx.effect === 'function') {
         ctx.effect(() => () => disposeGate(), 'tokens-login: sign-in gate')
@@ -903,6 +1328,11 @@ window.__ModuleLoader__.load({
       accountLabels: accountLabels,
       AccountSection: AccountSection,
       registerAccountSection: registerAccountSection,
+      launcherLabels: launcherLabels,
+      AccountLauncher: AccountLauncher,
+      registerAccountLauncher: registerAccountLauncher,
+      LAUNCHER_SLOT: LAUNCHER_SLOT,
+      LAUNCHER_PRIORITY: LAUNCHER_PRIORITY,
     }
     exports.inject = []
     return module.exports

@@ -71,3 +71,6 @@
 "LOGIN-070","client","复制切换失效同步状态","已显示Key列表","复制和使用返回失效错误","点击对应按钮","同步失效状态可重新登录且不刷新页面","P1","已自动化","test/run-test-cases.mjs :: copying and switching account keys also handle session expiry"
 "LOGIN-071","host","浏览器回传凭证已失效","回传后profile或Key请求拒绝凭证","401响应","执行浏览器登录路由","不误报登录成功返回准确失效状态","P1","已自动化","test/run-test-cases.mjs :: a rejected browser handoff is not reported as a successful login"
 "LOGIN-072","client","启动门禁失效双语提示","模拟DOM且只有旧模型Key","应用zh/en语言与失效状态","检查启动提示再发起失败登录","双语提示无原始错误已有启动门禁策略不变且能再次登录","P1","已自动化","test/run-test-cases.mjs :: startup gate explains expiry in the app language without changing admission rules"
+"LOGIN-073","client","侧栏账号菜单替换上游","宿主提供slots与react","有无react-dom","注册侧栏菜单","注入settings.launcher且优先级-10低于上游默认0","P1","已自动化","test/run-test-cases.mjs :: account launcher replaces the upstream sidebar menu through settings.launcher"
+"LOGIN-074","client","已登录菜单与确认退出","账户已登录且有快捷键","zh-CN/en-US显示名","打开菜单点设置再退出取消与确认","显示账号名和首字母头像仅设置与退出无意见反馈确认后才注销并重载","P1","已自动化","test/run-test-cases.mjs :: account launcher shows the signed-in account and signs out after confirmation"
+"LOGIN-075","client","未登录菜单登录与状态同步","未登录且可浏览器登录","zh-CN/en-US","点登录后检查菜单与设置页及收起侧栏","显示更多与登录项登录后菜单和设置页同时显示账号收起时仅图标","P1","已自动化","test/run-test-cases.mjs :: account launcher signs in from the menu and shares account state with Settings"

@@ -76,6 +76,17 @@ requests also reject it, sign in again or replace it. Ordinary list/network erro
 stop loading and allow a retry without clearing the account session. Startup gate
 and explicit sign-out rules are unchanged.
 
+On DSH 0.2 and later, the plugin also replaces the sidebar-foot account menu: it
+registers in the `settings.launcher` slot at priority -10, below the upstream
+DeepSeek menu's default 0, so the upstream package is left untouched. Signed in,
+the trigger shows the TokensAPI display name (or username) with an initial as the
+avatar, and the menu offers **Settings** and **Sign out**; signed out, it shows
+**More** with **Settings** and **Sign in**, which starts the same browser sign-in.
+Sign-out asks for confirmation, then runs the usual sign-out and reloads. The menu
+and the Account page share one account state, so either reflects sign-in or
+sign-out at once. A collapsed sidebar shows the icon only; there is no feedback
+entry.
+
 ## Configuration (`cordis.patch.yml` → `config`)
 
 | Key | Default | Meaning |
