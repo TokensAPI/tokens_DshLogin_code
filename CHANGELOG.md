@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.1.9
+
+- Replace the sidebar-foot account menu with a TokensAPI one: registered in the
+  `settings.launcher` slot at priority -10 so the upstream DeepSeek menu is
+  shadowed without modifying its package.
+- Show the TokensAPI display name (or username) and an initial avatar when signed
+  in, **More** when signed out, and the icon only when the sidebar is collapsed.
+- Offer **Settings** (with its shortcut), plus **Sign out** with confirmation or
+  **Sign in** through the existing browser sign-in; no feedback entry.
+- Share one account state between the menu and the Account settings page.
+
+[0.1.9](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.8...v0.1.9)
+
 ## 0.1.8
 
 - Clarify in Chinese and English that API-key sign-in lasts only for the current
