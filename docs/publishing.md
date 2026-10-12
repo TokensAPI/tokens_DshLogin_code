@@ -17,6 +17,8 @@
 
 仓库 Secret 名为 `VERDACCIO_PUBLISH_TOKEN`，仅提供给发布步骤，`npm whoami` 必须返回 `tokenscowork`。缺失、鉴权失败或账号不符均停止。令牌不要写入代码或日志；过期后替换同名 Secret，再重试原运行。
 
+发布后的统一包检查使用只读 Secret `PLUGIN_CHECK_REGISTRY_TOKEN`，账号必须是 `market`，只交给检查步骤和固定提交的检查流程。未配置时发布前给出警告并跳过包检查，不阻断发布；已配置但账号不符则在发布前失败。
+
 ## 发布前
 
 1. 更新 package.json 与 package-lock.json 版本，新增对应 CHANGELOG 小节和链接。

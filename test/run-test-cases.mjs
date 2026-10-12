@@ -920,6 +920,8 @@ function registerCases() {
       assert.equal(workflow.concurrency['cancel-in-progress'], false)
       const packageCheck = workflow.jobs['package-check']
       assert.equal(packageCheck.needs, 'publish')
+      assert.equal(packageCheck.if, "needs.publish.outputs.package-check == 'true'")
+      assert.equal(workflow.jobs.publish.outputs['package-check'], '${{ steps.checker.outputs.enabled }}')
       const checker = packageCheck.uses.match(/^TokensAPI\/tokens_DshPluginCheck_code\/\.github\/workflows\/check-plugin-package\.yml@([a-f0-9]{40})$/u)
       assert.ok(checker, '包检查必须调用固定提交的公共流程')
       assert.deepEqual(packageCheck.with, { package: '${{ needs.publish.outputs.package }}', checker_ref: checker[1] })
@@ -954,6 +956,17 @@ function registerCases() {
       assert.match(inspection.run, /NODE_AUTH_TOKEN:-/u)
       assert.match(inspection.run, /npm whoami.*== market/u)
       assert.doesNotMatch(inspection.run, /npm publish/u)
+      assert.equal(inspection.id, 'checker')
+      // 未配置只读凭证：跳过包检查但不阻断发布，且不触网。
+      const outputFile = join(mkdtempSync(join(tmpdir(), 'dsh-login-checker-')), 'output')
+      try {
+        const skipped = spawnSync('bash', ['-c', inspection.run], { encoding: 'utf8', env: { ...process.env, NODE_AUTH_TOKEN: '', GITHUB_OUTPUT: outputFile } })
+        assert.equal(skipped.status, 0, skipped.stderr)
+        assert.match(skipped.stdout, /::warning::.*PLUGIN_CHECK_REGISTRY_TOKEN/u)
+        assert.equal(readFileSync(outputFile, 'utf8').trim(), 'enabled=false')
+      } finally {
+        rmSync(dirname(outputFile), { recursive: true, force: true })
+      }
       const command = publisher.run
       assert.ok(command.includes('npm whoami --registry=https://npm.tokensapi.ai/'))
       assert.ok(command.includes('tokenscowork'))
