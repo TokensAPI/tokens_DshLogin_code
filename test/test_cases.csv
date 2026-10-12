@@ -74,3 +74,8 @@
 "LOGIN-073","client","侧栏账号菜单替换上游","宿主提供slots与react","有无react-dom","注册侧栏菜单","注入settings.launcher且优先级-10低于上游默认0","P1","已自动化","test/run-test-cases.mjs :: account launcher replaces the upstream sidebar menu through settings.launcher"
 "LOGIN-074","client","已登录菜单与确认退出","账户已登录且有快捷键","zh-CN/en-US显示名","打开菜单点设置再退出取消与确认","显示账号名和首字母头像仅设置与退出无意见反馈确认后才注销并重载","P1","已自动化","test/run-test-cases.mjs :: account launcher shows the signed-in account and signs out after confirmation"
 "LOGIN-075","client","未登录菜单登录与状态同步","未登录且可浏览器登录","zh-CN/en-US","点登录后检查菜单与设置页及收起侧栏","显示更多与登录项登录后菜单和设置页同时显示账号收起时仅图标","P1","已自动化","test/run-test-cases.mjs :: account launcher signs in from the menu and shares account state with Settings"
+"LOGIN-076","host","配Key失败错误码传到前台","模拟创建失败","真实路由登录","执行登录路由","返回已登录及apiKeyErrorCode且原始消息仅作诊断","P1","已自动化","test/run-test-cases.mjs :: a failed key provisioning reaches the client with its error code"
+"LOGIN-077","client","宿主错误码全部有双语提示","读取宿主全部LoginError代码","zh-CN/en-US及未知代码","逐个取提示","每个代码有对应语言提示未知代码用通用提示","P1","已自动化","test/run-test-cases.mjs :: error text covers every host error code in both languages"
+"LOGIN-078","client","登录页与API Key页错误本地化","英文和中文界面","unreachable/invalid_key/未知代码/断网","登录及提交Key失败","显示当前语言提示不显示宿主原始中文","P1","已自动化","test/run-test-cases.mjs :: sign-in gate errors are localized by code instead of showing host Chinese"
+"LOGIN-079","client","错误提示随界面语言切换","中文界面已显示连接失败","切换为英文","触发语言观察重绘","红字提示改为英文","P2","已自动化","test/run-test-cases.mjs :: a sign-in gate error follows a later switch of the app language"
+"LOGIN-080","client","设置页与侧栏菜单错误本地化","配Key失败或菜单登录失败","zh-CN/en-US及未知代码断网","在设置页和侧栏菜单登录","显示本地化提示不显示宿主原始中文","P1","已自动化","test/run-test-cases.mjs :: settings and the sidebar menu localize key setup and sign-in failures"

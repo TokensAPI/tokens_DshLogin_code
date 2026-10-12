@@ -381,9 +381,10 @@ async function verifySession(ctx, runtime, settings, accessToken, userId) {
 
 /**
  * Sign-in end to end: default browser → loopback callback → access token →
- * sk- key. Resolves with '' on success, or the key-provisioning error when
- * the session landed but the key did not: a failed hand-off never undoes a
- * successful sign-in, it just leaves the manual path visible.
+ * sk- key. Resolves with '' on success, or the key-provisioning failure
+ * ({ code, message }) when the session landed but the key did not: a failed
+ * hand-off never undoes a successful sign-in, it just leaves the manual path
+ * visible. The code is what the client localizes; the message is diagnostic.
  */
 function login(ctx, runtime, settings, locale) {
   // A second click must not start a second listener. But the browser tab is
@@ -437,7 +438,7 @@ async function signIn(ctx, runtime, settings, locale) {
     return ''
   } catch (error) {
     if (error?.code === 'session_expired') throw error
-    return String(error?.message ?? error)
+    return { code: typeof error?.code === 'string' ? error.code : 'upstream', message: String(error?.message ?? error) }
   }
 }
 
@@ -735,7 +736,7 @@ function registerLoginRoute(scope, host, settings) {
         else if (body?.action === 'useApiKey') await useApiKey(host, settings, body)
         else throw new LoginError('invalid_input', 'unknown action')
         send(200, {
-          ...(apiKeyError === '' ? {} : { apiKeyError }),
+          ...(apiKeyError === '' ? {} : { apiKeyError: apiKeyError.message, apiKeyErrorCode: apiKeyError.code }),
           ...(await loginStatus(host, runtime, settings)),
         })
       } catch (error) {

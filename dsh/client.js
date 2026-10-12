@@ -108,10 +108,7 @@ window.__ModuleLoader__.load({
             keyRetainedHint: '已保存的模型 API Key 未被清除，可以继续尝试使用模型；如果模型请求也提示凭证无效，请重新登录或更换 API Key。',
             signInRequiredHint: '请重新登录以配置模型 API Key。',
             requestFailed: '操作未完成，请重试。',
-            networkError: '无法连接 TokensAPI，请检查网络后重试。',
             upstreamError: '暂时无法读取账户信息，请稍后重试。',
-            signinRequired: '请先登录 TokensAPI 账号。',
-            invalidKey: '模型 API Key 无效，请检查或更换后重试。',
           }
         : {
             nav: 'Account',
@@ -145,11 +142,67 @@ window.__ModuleLoader__.load({
             keyRetainedHint: 'Your saved model API key has not been removed. You can still try using models; if model requests also reject the credentials, sign in again or replace the API key.',
             signInRequiredHint: 'Sign in again to configure a model API key.',
             requestFailed: 'The action could not be completed. Please retry.',
-            networkError: 'Cannot connect to TokensAPI. Check your connection and retry.',
             upstreamError: 'Account information is temporarily unavailable. Please retry later.',
-            signinRequired: 'Please sign in to your TokensAPI account first.',
-            invalidKey: 'The model API key is invalid. Check or replace it and retry.',
           }
+    }
+
+    /**
+     * What each host error code means to the user. The host's own messages
+     * are fixed Chinese diagnostics, so no surface shows them: everything the
+     * user reads comes from here, in the app's language.
+     */
+    function errorLabels() {
+      return chinese()
+        ? {
+            unreachable: '无法连接 TokensAPI，请检查网络后重试。',
+            upstream: 'TokensAPI 服务暂时不可用，请稍后重试。',
+            invalid_key: 'API Key 无效，请检查或更换后重试。',
+            session_expired: '账户登录已失效，请重新登录 TokensAPI 账号。',
+            browser_unavailable: '当前版本不支持浏览器登录，请改用 API Key。',
+            cancelled: '浏览器登录已超时或被取消，请重试。',
+            no_api_key: '账户中没有可用的 API Key，请在 TokensAPI 控制台创建后重试。',
+            invalid_input: '输入内容无效，请检查后重试。',
+            signin_required: '请先登录 TokensAPI 账号。',
+            signInFailed: '登录失败，请重试。',
+            statusUnavailable: '暂时无法读取登录状态，请重试。',
+            verifyFailed: 'API Key 验证未完成，请重试。',
+          }
+        : {
+            unreachable: 'Cannot connect to TokensAPI. Check your connection and retry.',
+            upstream: 'TokensAPI is temporarily unavailable. Please retry later.',
+            invalid_key: 'The API key is invalid. Check or replace it and retry.',
+            session_expired: 'Your account sign-in is no longer valid. Please sign in to TokensAPI again.',
+            browser_unavailable: 'This build cannot open a browser sign-in. Use an API key instead.',
+            cancelled: 'Browser sign-in timed out or was cancelled. Please retry.',
+            no_api_key: 'This account has no usable API key. Create one in the TokensAPI console and retry.',
+            invalid_input: 'The input is not valid. Check it and retry.',
+            signin_required: 'Please sign in to your TokensAPI account first.',
+            signInFailed: 'Sign-in failed. Please retry.',
+            statusUnavailable: 'Sign-in status is unavailable right now. Please retry.',
+            verifyFailed: 'The API key could not be verified. Please retry.',
+          }
+    }
+
+    var ERROR_CODES = [
+      'unreachable',
+      'upstream',
+      'invalid_key',
+      'session_expired',
+      'browser_unavailable',
+      'cancelled',
+      'no_api_key',
+      'invalid_input',
+      'signin_required',
+    ]
+
+    /**
+     * The user-facing text for a host error code, in the app's language. An
+     * unknown or missing code gets the caller's localized fallback — never the
+     * host's raw message.
+     */
+    function errorText(code, fallback) {
+      var table = errorLabels()
+      return ERROR_CODES.indexOf(code) >= 0 ? table[code] : fallback || table.signInFailed
     }
 
     /** The sidebar account menu; wording follows the upstream menu it replaces. */
@@ -315,7 +368,10 @@ window.__ModuleLoader__.load({
         return element
       }
 
+      // Messages may be passed as functions: a repaint after the app's
+      // language changes then re-reads them in the new language.
       function card(message, errored) {
+        if (typeof message === 'function') message = message()
         overlay.replaceChildren()
         var shell = node(
           'div',
@@ -362,7 +418,7 @@ window.__ModuleLoader__.load({
         // picked out of `t` on the way into card().
         t = labels()
         painted = chinese()
-        var shell = card(message || t.intro, Boolean(errored))
+        var shell = card(message || (() => labels().intro), Boolean(errored))
         // One door: the user's own browser, which carries the wallet
         // extensions, passkeys and existing sessions an embedded window never
         // could, so anything the site offers works there.
@@ -383,15 +439,23 @@ window.__ModuleLoader__.load({
             // send the app's so the hand-off page comes up in the same one.
             postAction({ action: 'login', locale: chinese() ? 'zh' : 'en' })
               .then(({ response, body }) => {
-                if (!response.ok && body?.code === 'session_expired') {
-                  renderLogin(labels().sessionExpired, true)
+                if (!response.ok) {
+                  renderLogin(
+                    body?.code === 'session_expired' ? () => labels().sessionExpired : () => errorText(body?.code),
+                    true,
+                  )
                   return
                 }
-                if (!response.ok) throw new Error(body?.error || 'login failed')
                 if (settle(body)) return
-                renderLogin(body?.apiKeyError ? t.keyWarnPrefix + body.apiKeyError : '', true)
+                renderLogin(
+                  body?.apiKeyError
+                    ? () => labels().keyWarnPrefix + errorText(body.apiKeyErrorCode, errorLabels().upstream)
+                    : '',
+                  true,
+                )
               })
-              .catch((error) => renderLogin(String(error.message || error), true))
+              // No answer at all: the host route was unreachable.
+              .catch(() => renderLogin(() => errorText('unreachable'), true))
           })
           shell.appendChild(button)
         }
@@ -411,7 +475,7 @@ window.__ModuleLoader__.load({
         repaint = () => renderApiKey(message, errored)
         t = labels()
         painted = chinese()
-        var shell = card(message || t.apiKeyIntro, Boolean(errored))
+        var shell = card(message || (() => labels().apiKeyIntro), Boolean(errored))
         var form = node('form')
         var input = node(
           'input',
@@ -434,7 +498,7 @@ window.__ModuleLoader__.load({
           event.preventDefault()
           var apiKey = input.value.trim()
           if (!apiKey) {
-            renderApiKey(t.missing, true)
+            renderApiKey(() => labels().missing, true)
             return
           }
           input.disabled = true
@@ -443,17 +507,16 @@ window.__ModuleLoader__.load({
           postAction({ action: 'setApiKey', apiKey: apiKey })
             .then(({ response, body }) => {
               input.value = ''
-              if (!response.ok) throw new Error(body?.error || t.missing)
               // Submitting a key here is an explicit act of entry, so it opens
               // the gate even without a session. A key merely *found* at boot
               // does not — that is what settle() refuses.
-              if (body?.authenticated === true) {
+              if (response.ok && body?.authenticated === true) {
                 close()
                 return
               }
-              renderApiKey(body?.error || '', true)
+              renderApiKey(() => errorText(body?.code, errorLabels().verifyFailed), true)
             })
-            .catch((error) => renderApiKey(String(error.message || error), true))
+            .catch(() => renderApiKey(() => errorText('unreachable'), true))
         })
         shell.appendChild(form)
         if (canSignIn) {
@@ -480,15 +543,19 @@ window.__ModuleLoader__.load({
             .then((body) => ({ response: response, body: rememberLocale(body) })),
         )
         .then(({ response, body }) => {
-          if (!response.ok) throw new Error(body?.error || 'status unavailable')
+          if (!response.ok) {
+            canSignIn = false
+            renderApiKey(() => errorText(body?.code, errorLabels().statusUnavailable), true)
+            return
+          }
           if (settle(body)) return
           canSignIn = body?.canSignIn === true
-          if (canSignIn) renderLogin(body?.sessionExpired ? labels().sessionExpired : '', body?.sessionExpired === true)
+          if (canSignIn) renderLogin(body?.sessionExpired ? () => labels().sessionExpired : '', body?.sessionExpired === true)
           else renderApiKey('', false)
         })
-        .catch((error) => {
+        .catch(() => {
           canSignIn = false
-          renderApiKey(String(error.message || error), true)
+          renderApiKey(() => errorText('unreachable'), true)
         })
       return close
     }
@@ -625,13 +692,12 @@ window.__ModuleLoader__.load({
           }
         }, [])
 
+        // Two codes read better in this page's own words; the rest share the
+        // plugin-wide table, and anything unknown is a generic retry.
         var errorMessage = (code) => {
           if (code === 'session_expired') return t.sessionExpired
-          if (code === 'signin_required') return t.signinRequired
-          if (code === 'unreachable') return t.networkError
           if (code === 'upstream') return t.upstreamError
-          if (code === 'invalid_key') return t.invalidKey
-          return t.requestFailed
+          return errorText(code, t.requestFailed)
         }
         var acceptFailure = (body) => {
           if ((body?.code === 'session_expired' || body?.code === 'signin_required') && body?.status) {
@@ -697,7 +763,7 @@ window.__ModuleLoader__.load({
               }
               if (result?.apiKeyError) {
                 erroredPair[1](true)
-                notePair[1](String(result.apiKeyError))
+                notePair[1](labels().keyWarnPrefix + errorText(result.apiKeyErrorCode, errorLabels().upstream))
                 return
               }
               notePair[1](t.done)
@@ -708,7 +774,7 @@ window.__ModuleLoader__.load({
             .catch(() => {
               busyPair[1]('')
               erroredPair[1](true)
-              notePair[1](t.networkError)
+              notePair[1](errorText('unreachable'))
             })
         }
 
@@ -986,6 +1052,9 @@ window.__ModuleLoader__.load({
       '.tkl-outline:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
       '.tkl-primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}',
       '.tkl-primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}',
+      '.tkl-toast{position:fixed;top:40px;left:50%;z-index:1100;pointer-events:none;width:max-content;max-width:min(640px,calc(100vw - 48px));padding:12px 16px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-toast-bg);color:var(--dsw-alias-toast-label);font-size:14px;line-height:22px;box-shadow:var(--dsw-shadow-lv3);transform:translateX(-50%);animation:tkl-toast-in 160ms ease-out,tkl-toast-fade 1000ms ease 3000ms forwards}',
+      '@keyframes tkl-toast-in{from{opacity:0;transform:translate(-50%,-4px)}to{opacity:1;transform:translateX(-50%)}}',
+      '@keyframes tkl-toast-fade{to{opacity:0}}',
     ].join('\n')
 
     /**
@@ -1037,6 +1106,9 @@ window.__ModuleLoader__.load({
         var busyPair = react.useState('')
         var failedPair = react.useState(false)
         var placePair = react.useState(null)
+        // A failed menu sign-in, announced like the host's Toast: localized
+        // from the host's error code, gone after the same 3s hold + 1s fade.
+        var noticePair = react.useState('')
         var rootRef = react.useRef(null)
         var listRef = react.useRef(null)
         var triggerRef = react.useRef(null)
@@ -1120,6 +1192,12 @@ window.__ModuleLoader__.load({
         }, [open])
 
         react.useEffect(() => {
+          if (noticePair[0] === '') return
+          var timer = setTimeout(() => noticePair[1](''), 4000)
+          return () => clearTimeout(timer)
+        }, [noticePair[0]])
+
+        react.useEffect(() => {
           if (!confirming || typeof document.addEventListener !== 'function') return
           cancelRef.current?.focus?.()
           var onKeyDown = (event) => {
@@ -1144,12 +1222,18 @@ window.__ModuleLoader__.load({
             return
           }
           busyPair[1]('login')
+          noticePair[1]('')
           postAction({ action: 'login', locale: chinese() ? 'zh' : 'en' })
             .then(({ response, body }) => {
-              if (response.ok) publishStatus(body)
-              else if (body?.status) publishStatus(body.status)
+              if (response.ok) {
+                publishStatus(body)
+                if (body?.apiKeyError) noticePair[1](labels().keyWarnPrefix + errorText(body.apiKeyErrorCode, errorLabels().upstream))
+                return
+              }
+              if (body?.status) publishStatus(body.status)
+              noticePair[1](errorText(body?.code))
             })
-            .catch(() => {})
+            .catch(() => noticePair[1](errorText('unreachable')))
             .finally(() => busyPair[1](''))
         }
 
@@ -1284,6 +1368,7 @@ window.__ModuleLoader__.load({
           ),
           list,
           dialog,
+          noticePair[0] ? portal(h('div', { role: 'alert', className: 'tkl-toast' }, noticePair[0])) : null,
         )
       }
     }
@@ -1329,6 +1414,9 @@ window.__ModuleLoader__.load({
       AccountSection: AccountSection,
       registerAccountSection: registerAccountSection,
       launcherLabels: launcherLabels,
+      errorLabels: errorLabels,
+      errorText: errorText,
+      ERROR_CODES: ERROR_CODES,
       AccountLauncher: AccountLauncher,
       registerAccountLauncher: registerAccountLauncher,
       LAUNCHER_SLOT: LAUNCHER_SLOT,

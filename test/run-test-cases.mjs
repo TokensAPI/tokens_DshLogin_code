@@ -282,9 +282,20 @@ function registerCases() {
       const ctx = fakeCtx()
       signIn(ctx, { failCreate: true })
       const apiKeyError = await login(ctx, loginRuntime(ctx), SETTINGS)
-      assert.match(apiKeyError, /最大令牌数量/)
+      assert.equal(apiKeyError.code, 'upstream', 'the client localizes by code')
+      assert.match(apiKeyError.message, /最大令牌数量/)
       assert.equal(ctx.store.get(TOKENS_LOGIN.accessTokenRef), 'access-token-xyz')
       assert.equal(ctx.store.has(TOKENS_LOGIN.apiKeyRef), false)
+    })
+
+    test('a failed key provisioning reaches the client with its error code', async () => {
+      const ctx = fakeCtx()
+      signIn(ctx, { failCreate: true })
+      const result = await loginRoute(ctx)({ action: 'login' })
+      assert.equal(result.status, 200)
+      assert.equal(result.body.signedIn, true)
+      assert.equal(result.body.apiKeyErrorCode, 'upstream')
+      assert.match(result.body.apiKeyError, /最大令牌数量/u, 'the raw message stays available as a diagnostic')
     })
 
     test('login without a desktop bridge reports browser_unavailable', async () => {
@@ -1404,9 +1415,160 @@ function registerCases() {
       }
     })
 
+    const cjk = /[㐀-鿿]/u
+    const settle = async () => { for (let i = 0; i < 6; i++) await new Promise(resolve => setImmediate(resolve)) }
+
+    // The real sign-in gate on a minimal DOM: what the user reads is the text
+    // of every node in the overlay.
+    function gateDom(language, request) {
+      function element(tag) {
+        return { tag, textContent: '', value: '', children: [], style: {}, events: {}, attributes: {},
+          appendChild(child) { child.parent = this; this.children.push(child) },
+          replaceChildren() { this.children = [] },
+          setAttribute(key, value) { this.attributes[key] = value },
+          addEventListener(key, fn) { this.events[key] = fn },
+          focus() {},
+          remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this) },
+        }
+      }
+      const body = element('body')
+      const document = { body, documentElement: { lang: language, style: {} }, createElement: element, getElementById: () => null }
+      const watchers = []
+      const MutationObserver = class { constructor(callback) { watchers.push(callback) } observe() {} disconnect() {} }
+      const { gate } = client(language, 'en-US', { document, fetch: request, setTimeout, MutationObserver })
+      const dispose = gate.registerLoginGate()
+      const flatten = node => [node, ...node.children.flatMap(flatten)]
+      const nodes = () => body.children.flatMap(flatten)
+      return {
+        gate, document, dispose,
+        // What the gate's <html lang> watcher sees when the app switches language.
+        switchLanguage(lang) { document.documentElement.lang = lang; for (const watcher of watchers) watcher([]) },
+        text: () => nodes().map(node => node.textContent).join('\n'),
+        alert: () => nodes().find(node => node.attributes.role === 'alert')?.textContent ?? '',
+        button: label => nodes().find(node => node.tag === 'button' && node.textContent === label),
+        node: tag => nodes().find(node => node.tag === tag),
+      }
+    }
+
+    // Host failures as the route sends them: a stable code plus the host's
+    // fixed Chinese diagnostic, which must never reach the user verbatim.
+    const hostFailure = {
+      unreachable: { status: 503, body: { code: 'unreachable', error: '无法连接 TokensAPI，请检查网络后重试' } },
+      invalid_key: { status: 401, body: { code: 'invalid_key', error: 'API Key 无效，请检查后重试' } },
+      unknown: { status: 400, body: { code: 'mystery_code', error: '原始中文宿主错误' } },
+    }
+    const failureReply = name => ({ ok: false, json: async () => hostFailure[name].body })
+
+    test('error text covers every host error code in both languages', () => {
+      const thrown = new Set([...readFileSync(new URL('../dsh/index.js', import.meta.url), 'utf8')
+        .matchAll(/new LoginError\('([a-z_]+)'/gu)].map(match => match[1]))
+      const { gate, document } = client('en-US')
+      assert.deepEqual([...gate.ERROR_CODES].sort(), [...thrown].sort(), 'every code the host throws has a localized text')
+      for (const language of ['en-US', 'zh-CN']) {
+        document.documentElement.lang = language
+        for (const code of thrown) {
+          const text = gate.errorText(code)
+          assert.ok(text.trim(), code)
+          assert.equal(cjk.test(text), language === 'zh-CN', `${language} ${code}: ${text}`)
+        }
+        const fallback = gate.errorText('mystery_code')
+        assert.equal(fallback, gate.errorLabels().signInFailed)
+        assert.equal(gate.errorText(undefined, 'caller fallback'), 'caller fallback')
+      }
+    })
+
+    test('sign-in gate errors are localized by code instead of showing host Chinese', async () => {
+      for (const language of ['en', 'zh']) {
+        const zh = language === 'zh'
+        // Login page: host code, unknown code, and no answer at all.
+        for (const name of ['unreachable', 'unknown', 'offline']) {
+          const view = gateDom(language, async (_url, init) => {
+            if (init?.method !== 'POST') return clientReply({ ...accountStatus, signedIn: false, user: null })
+            if (name === 'offline') throw new TypeError('Failed to fetch')
+            return failureReply(name)
+          })
+          await settle()
+          view.button(view.gate.labels().login).events.click()
+          await settle()
+          const expected = name === 'unknown' ? view.gate.errorLabels().signInFailed : view.gate.errorText('unreachable')
+          assert.equal(view.node('p').textContent, expected, `${language} login ${name}`)
+          assert.equal(cjk.test(view.text()), zh, `${language} login ${name}`)
+          for (const failure of Object.values(hostFailure)) assert.ok(!view.text().split('\n').includes(failure.body.error))
+          view.dispose()
+        }
+        // API key page: an invalid key, an unknown code, and the host route down.
+        for (const name of ['invalid_key', 'unknown', 'unreachable']) {
+          const view = gateDom(language, async (_url, init) => init?.method === 'POST'
+            ? failureReply(name) : clientReply({ ...accountStatus, signedIn: false, authenticated: false, canSignIn: false, user: null }))
+          await settle()
+          view.node('input').value = 'sk-wrong'
+          view.node('form').events.submit({ preventDefault() {} })
+          await settle()
+          const expected = name === 'unknown' ? view.gate.errorLabels().verifyFailed : view.gate.errorText(name)
+          assert.equal(view.node('p').textContent, expected, `${language} api key ${name}`)
+          assert.equal(cjk.test(view.text()), zh, `${language} api key ${name}`)
+          view.dispose()
+        }
+      }
+    })
+
+    test('a sign-in gate error follows a later switch of the app language', async () => {
+      const view = gateDom('zh', async (_url, init) => init?.method === 'POST'
+        ? failureReply('unreachable') : clientReply({ ...accountStatus, signedIn: false, user: null }))
+      await settle()
+      view.button(view.gate.labels().login).events.click()
+      await settle()
+      assert.ok(view.node('p').textContent.startsWith('无法连接'))
+      view.switchLanguage('en')
+      assert.equal(view.node('p').textContent, 'Cannot connect to TokensAPI. Check your connection and retry.')
+      assert.equal(cjk.test(view.text()), false)
+      view.dispose()
+    })
+
+    test('settings and the sidebar menu localize key setup and sign-in failures', async () => {
+      for (const language of ['en-US', 'zh-CN']) {
+        const zh = language === 'zh-CN'
+        // Settings: sign-in landed but key provisioning failed with a Chinese host message.
+        const settingsSession = clientSession(language, async (_url, init) => {
+          if (init?.method !== 'POST') return clientReply({ ...accountStatus, signedIn: false, user: null })
+          if (JSON.parse(init.body).action === 'listApiKeys') return clientReply({ apiKeys: [] })
+          return clientReply({ ...accountStatus, apiKeyError: '自动创建 API Key 失败：最大令牌数量', apiKeyErrorCode: 'upstream',
+            user: { username: 'alice' } })
+        })
+        const settings = mount(settingsSession, (gate, react) => gate.AccountSection(react))
+        await settings.flush()
+        settings.button(settingsSession.gate.accountLabels().signIn).props.onClick()
+        await settings.flush()
+        const { gate } = settingsSession
+        assert.ok(settings.text().includes(gate.labels().keyWarnPrefix + gate.errorText('upstream')), settings.text())
+        assert.ok(!settings.text().includes('最大令牌数量'))
+        if (!zh) assert.ok(!cjk.test(settings.text()), settings.text())
+
+        // Sidebar menu: a failed sign-in is announced in the app language.
+        for (const name of ['unreachable', 'unknown', 'offline']) {
+          const session = clientSession(language, async (_url, init) => {
+            if (init?.method !== 'POST') return clientReply({ ...accountStatus, signedIn: false, user: null })
+            if (name === 'offline') throw new TypeError('Failed to fetch')
+            return failureReply(name)
+          })
+          const t = session.gate.launcherLabels()
+          const launcher = launcherView(session)
+          await launcher.flush()
+          launcher.find(node => node.props['aria-label'] === t.menu).props.onClick()
+          await launcher.flush()
+          launcher.menuItems().find(entry => entry.text === t.signIn).item.props.onClick()
+          await launcher.flush()
+          const alert = launcher.find(node => node.props.role === 'alert')
+          const expected = name === 'unknown' ? session.gate.errorLabels().signInFailed : session.gate.errorText('unreachable')
+          assert.equal(alert?.children.join(''), expected, `${language} menu ${name}`)
+          assert.equal(cjk.test(expected), zh)
+        }
+      }
+    })
+
     test('client language tables have matching nonempty translated user-visible labels', () => {
       const { gate, document } = client('zh-CN')
-      for (const name of ['labels', 'accountLabels', 'launcherLabels']) {
+      for (const name of ['labels', 'accountLabels', 'launcherLabels', 'errorLabels']) {
         const zh = gate[name]()
         document.documentElement.lang = 'en-US'
         const en = gate[name]()
