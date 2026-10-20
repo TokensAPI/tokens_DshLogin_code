@@ -14,6 +14,7 @@ import { validateRelease } from '../scripts/validate-release.mjs'
 import { verifyPackage } from '../scripts/verify-package.mjs'
 import { ensureUnpublished, verifyPublished } from '../scripts/registry-release.mjs'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -1596,6 +1597,15 @@ function registerCases() {
   // 真实凭证跨进程恢复
   {
     const fixture = fileURLToPath(import.meta.url)
+    // The point of these cases is that the child loads the *real* upstream
+    // components, not a mock. Which DSH line they come from is whatever the
+    // module graph resolves: 0.1.5-rc.2 from this repo's devDependencies, or a
+    // product host's own node_modules when the suite is run against one
+    // (T0028 ran it on DSH 0.2.1-rc.2 / cordis 4.0.5). Asserting literals here
+    // locked the case to one line, so the suite could not be pointed at the
+    // host the product actually ships.
+    const require = createRequire(import.meta.url)
+    const resolvedVersion = (specifier) => require(specifier + '/package.json').version
 
     function processStep(action, directory) {
       const result = spawnSync(process.execPath, [fixture, '--credential-fixture', action, directory], { encoding: 'utf8', timeout: 15_000 })
@@ -1611,8 +1621,12 @@ function registerCases() {
         assert.equal(restored.signedIn, true)
         assert.equal(restored.authenticated, true)
         assert.equal(restored.user.displayName, 'Test User')
-        assert.equal(restored.providerVersion, '0.1.5-rc.2')
-        assert.equal(restored.cordisVersion, '4.0.2')
+        // Real packages at a real version, and the same ones this process
+        // resolves — a stub or a second physical copy would not match.
+        assert.equal(restored.providerVersion, resolvedVersion('@deepseek-ai/dsh-credentials-local'))
+        assert.equal(restored.cordisVersion, resolvedVersion('@deepseek-ai/cordis'))
+        assert.match(restored.providerVersion, /^\d+\.\d+\.\d+(?:-[\w.]+)?$/u)
+        assert.match(restored.cordisVersion, /^\d+\.\d+\.\d+(?:-[\w.]+)?$/u)
         assert.equal(restored.authorizationMatches, true)
         assert.equal(restored.source, 'file')
         const document = readFileSync(join(directory, '.credentials.yaml'), 'utf8')
@@ -1689,7 +1703,6 @@ async function credentialProcess() {
   const { Context } = await import('@deepseek-ai/cordis')
   const { LocalCredentialProvider } = await import('@deepseek-ai/dsh-credentials-local')
   const { createLaunchEnvironmentSnapshot, DSH_LAUNCH_ENVIRONMENT_KEY } = await import('@deepseek-ai/dsh-launch-environment')
-  const { createRequire } = await import('node:module')
   const { get } = await import('node:http')
   const { join } = await import('node:path')
 
