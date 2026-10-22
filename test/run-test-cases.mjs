@@ -22,6 +22,11 @@ const directory = dirname(fileURLToPath(import.meta.url))
 const root = dirname(directory)
 const suiteFlag = '--conditions=tokens-login-case-suite'
 const headers = ['用例编号', '所属模块', '用例标题', '前置条件', '测试数据', '操作步骤', '预期结果', '优先级', '自动化状态', '对应测试']
+// The only files a case may map to. The host-contract cases live in their own
+// file because they need a real Host; everything else is implemented here.
+export const caseFiles = ['test/run-test-cases.mjs', 'test/host-contract.test.mjs']
+/** Cases that only run against an installed Host; `npm run check:host` runs these. */
+const hostModule = 'host-contract'
 
 export function parseCases(source) {
   const rows = []
@@ -51,7 +56,8 @@ export function parseCases(source) {
     if (item['自动化状态'] !== '已自动化') throw new Error(id + ': incomplete automation')
     item.references = item['对应测试'].split(' | ')
     for (const reference of item.references) {
-      if (!/^test\/run-test-cases\.mjs :: .+$/u.test(reference)) throw new Error(id + ': invalid mapping ' + reference)
+      const [file, name] = reference.split(' :: ')
+      if (!caseFiles.includes(file) || !name) throw new Error(id + ': invalid mapping ' + reference)
     }
     return item
   })
@@ -59,36 +65,91 @@ export function parseCases(source) {
   return cases
 }
 
+/**
+ * Decide each case's outcome from the test results.
+ *
+ * Three outcomes, not two. A case whose tests all declined to run — the
+ * host-contract cases without an installed Host — is **not executed**: it is
+ * never counted as passed, and it is reported separately so a run without a
+ * Host cannot be mistaken for a clean one.
+ */
 export function evaluateCases(cases, results) {
-  return cases.map(item => ({ id: item['用例编号'], errors: item.references.flatMap(reference => {
-    const result = results.get(reference)
-    return result?.passed ? [] : [reference + ': ' + (result?.reason ?? 'missing test / not executed')]
-  }) }))
+  return cases.map(item => {
+    const outcomes = item.references.map(reference => ({ reference, result: results.get(reference) }))
+    const notExecuted = outcomes.filter(({ result }) => result?.notExecuted)
+    return {
+      id: item['用例编号'],
+      // Everything that declined to run and nothing that failed: not executed.
+      notExecuted: notExecuted.length === outcomes.length
+        ? notExecuted.map(({ reference, result }) => reference + ': ' + result.reason)
+        : [],
+      errors: notExecuted.length === outcomes.length ? [] : outcomes.flatMap(({ reference, result }) =>
+        result?.passed ? [] : [reference + ': ' + (result?.reason ?? 'missing test / not executed')]),
+    }
+  })
 }
 
-async function main() {
-  const cases = parseCases(readFileSync(join(directory, 'test_cases.csv'), 'utf8'))
+async function main({ hostOnly = false } = {}) {
+  const all = parseCases(readFileSync(join(directory, 'test_cases.csv'), 'utf8'))
+  const cases = hostOnly ? all.filter(item => item['所属模块'] === hostModule) : all
+  if (cases.length === 0) throw new Error('No cases selected')
+  const hostCases = new Set(all.filter(item => item['所属模块'] === hostModule).flatMap(item => item.references))
   const files = [...new Set(cases.flatMap(item => item.references.map(reference => reference.split(' :: ')[0])))]
   const results = new Map()
   let failedTests = 0
-  for await (const event of run({ files: files.map(file => join(root, file)), isolation: 'process', execArgv: [suiteFlag] })) {
+  // One test file at a time: a host-contract run boots a whole Host, and two
+  // of those at once has taken this machine down.
+  const notes = []
+  for await (const event of run({ files: files.map(file => join(root, file)), isolation: 'process', concurrency: 1, execArgv: [suiteFlag] })) {
+    // A case can execute on one host and not on another. Those notes are
+    // written by the case itself and forwarded here so a partial run is never
+    // invisible, whatever the case's own verdict was.
+    if (['test:stderr', 'test:stdout'].includes(event.type)) {
+      for (const line of String(event.data.message ?? '').split('\n')) {
+        if (/^\s*(NOT EXECUTED|NOT DECLARED|PARTIAL)/u.test(line)) notes.push(line.trimEnd())
+      }
+      continue
+    }
     if (!['test:pass', 'test:fail'].includes(event.type)) continue
     const data = event.data
     const file = data.file ? relative(root, resolve(data.file)).replaceAll('\\', '/') : ''
-    const passed = event.type === 'test:pass' && !data.skip && !data.todo
-    const reason = data.skip || data.todo ? 'skipped/TODO'
-      : String(data.details?.error?.cause?.stack ?? data.details?.error?.message ?? 'test failed')
     const key = file + ' :: ' + data.name
+    const declined = Boolean(data.skip || data.todo)
+    const passed = event.type === 'test:pass' && !declined
+    // A host-contract case that declined to run had no Host to run against;
+    // that is "not executed", which is neither a pass nor a defect.
+    const notExecuted = declined && hostCases.has(key)
+    // node:test hands back the reason a case gave for declining; use it, so the
+    // report says which host could not answer and why.
+    const declinedFor = [data.skip, data.todo].find(value => typeof value === 'string' && value !== '')
+    const reason = declined
+      ? (notExecuted ? (declinedFor ?? 'NOT EXECUTED: no installed host was configured (set DSH_HOST_ROOT)') : 'skipped/TODO')
+      : String(data.details?.error?.cause?.stack ?? data.details?.error?.message ?? 'test failed')
     if (results.has(key)) throw new Error('Ambiguous duplicate test name: ' + key)
-    results.set(key, { passed, reason })
-    if (!passed) { failedTests++; console.error(key + '\n' + reason) }
+    results.set(key, { passed, notExecuted, reason })
+    if (!passed && !notExecuted) { failedTests++; console.error(key + '\n' + reason) }
   }
   const evaluated = evaluateCases(cases, results)
   const failures = evaluated.filter(item => item.errors.length)
-  const passedCases = cases.length - failures.length
+  const skipped = evaluated.filter(item => item.notExecuted.length)
+  const passedCases = cases.length - failures.length - skipped.length
   for (const failure of failures) console.error(failure.id + '\n' + failure.errors.join('\n'))
-  console.log(`${passedCases}/${cases.length} cases passed; ${failures.length || failedTests ? 'failed/incomplete' : 'all passed'}.`)
-  process.exitCode = failures.length || failedTests ? 1 : 0
+  if (notes.length) {
+    console.log(`\n${'='.repeat(60)}\nPARTIALLY EXECUTED — a case ran on some hosts and not others:`)
+    for (const note of [...new Set(notes)]) console.log(`  ${note.trim()}`)
+    console.log('='.repeat(60))
+  }
+  if (skipped.length) {
+    console.log(`\n${'='.repeat(60)}\nNOT EXECUTED (${skipped.length}) — not counted as passed:`)
+    for (const item of skipped) console.log(`  ${item.id}  ${item.notExecuted.join('; ')}`)
+    console.log('='.repeat(60))
+  }
+  const verdict = failures.length || failedTests ? 'failed/incomplete' : skipped.length ? 'no failures, but see NOT EXECUTED above' : 'all passed'
+  console.log(`${passedCases}/${cases.length} cases passed; ${skipped.length} not executed; ${verdict}.`)
+  // `check:host` exists to run against a Host, so nothing to run against is a
+  // failure there. A plain `npm test` on a machine with no Host reports the
+  // gap loudly and stays green on what it could actually check.
+  process.exitCode = failures.length || failedTests || (hostOnly && skipped.length) ? 1 : 0
 }
 
 function registerCases() {
@@ -1675,6 +1736,10 @@ function registerCases() {
       assert.throws(() => parseCases(header + row.replace('已自动化', '待自动化')), /incomplete/u)
       assert.throws(() => parseCases(header + row.replace('test/run-test-cases.mjs', '../outside.test.mjs')), /invalid mapping/u)
       assert.throws(() => parseCases(header + row.replace('test/run-test-cases.mjs', 'test/legacy.test.mjs')), /invalid mapping/u)
+      assert.throws(() => parseCases(header + row.replace(' :: named test', '')), /invalid mapping/u)
+      // The host-contract file is the only other implementation file allowed.
+      assert.deepEqual(caseFiles, ['test/run-test-cases.mjs', 'test/host-contract.test.mjs'])
+      assert.equal(parseCases(header + row.replace('test/run-test-cases.mjs', 'test/host-contract.test.mjs'))[0].references.length, 1)
       assert.throws(() => parseCases(header), /No functional cases/u)
     })
 
@@ -1685,6 +1750,31 @@ function registerCases() {
         assert.equal(evaluateCases(cases, results)[0].errors.length, 1)
       }
       assert.equal(evaluateCases(cases, new Map([['test/run-test-cases.mjs :: named test', { passed: true }]]))[0].errors.length, 0)
+    })
+
+    test('case runner reports a host case with no host as not executed, never as passed', () => {
+      const mapping = 'test/host-contract.test.mjs :: live case'
+      const cases = parseCases(header + row.replace('模块', 'host-contract').replace('test/run-test-cases.mjs :: named test', mapping))
+      const notExecuted = evaluateCases(cases, new Map([[mapping, { passed: false, notExecuted: true, reason: 'NOT EXECUTED: no host' }]]))[0]
+      assert.deepEqual(notExecuted.errors, [], 'a missing host was reported as a defect')
+      assert.equal(notExecuted.notExecuted.length, 1, 'a missing host was not reported at all')
+      assert.match(notExecuted.notExecuted[0], /NOT EXECUTED/u)
+      // It is counted as neither passed nor failed, so a run without a host can
+      // never read as a clean run of these cases.
+      const passed = evaluateCases(cases, new Map([[mapping, { passed: true }]]))[0]
+      assert.deepEqual([passed.errors, passed.notExecuted], [[], []])
+      const failed = evaluateCases(cases, new Map([[mapping, { passed: false, reason: 'the host refused' }]]))[0]
+      assert.equal(failed.errors.length, 1)
+      assert.deepEqual(failed.notExecuted, [])
+      // Half-executed is a failure, not a skip: one of the two really ran and broke.
+      const pair = parseCases(header + row.replace('模块', 'host-contract')
+        .replace('test/run-test-cases.mjs :: named test', `${mapping} | test/host-contract.test.mjs :: other case`))
+      const mixed = evaluateCases(pair, new Map([
+        [mapping, { passed: false, notExecuted: true, reason: 'NOT EXECUTED: no host' }],
+        ['test/host-contract.test.mjs :: other case', { passed: false, reason: 'the host refused' }],
+      ]))[0]
+      assert.equal(mixed.errors.length, 2)
+      assert.deepEqual(mixed.notExecuted, [])
     })
 
     test('case runner requires every mapped test of a multi-test case to pass', () => {
@@ -1755,5 +1845,5 @@ async function credentialProcess() {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] === '--credential-fixture') await credentialProcess()
   else if (process.execArgv.includes(suiteFlag)) registerCases()
-  else await main()
+  else await main({ hostOnly: process.argv.includes('--host') })
 }

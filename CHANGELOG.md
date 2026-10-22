@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.1.12
+
+- Add the real-host contract cases, `LOGIN-HOST-01`…`LOGIN-HOST-15`, run by
+  `npm run check:host`. An installed host's own launcher boots a throwaway
+  `$DSH_HOME` profile, its real loader mounts this package from the file set it
+  publishes, and every host interface the plugin uses is called once against
+  that running host: `credentials.resolve` / `set` / `unset`, the scoped
+  `ctx.inject` of `webServer` and `desktopRuntime`, `webServer.register` and the
+  route's same-origin fence on the host's own listener, the
+  `credentials/reference-updated` fan-out, the desktop bridge's `openExternal`
+  behind the host's own HTTPS fence, the whole browser sign-in loopback
+  including a refused nonce, the account key actions, the plugin-admission
+  evaluator, the host's slot contract and its real `SlotRegistry`.
+  `docs/host-interfaces.md` maps each interface to its case.
+- Report a case with no host to run against as `NOT EXECUTED` instead of
+  counting it as passed: `npm test` lists those separately and stays green on
+  what it could check, while `npm run check:host` exits non-zero. A case that
+  ran on some configured hosts and not others says which, and why.
+- No behaviour change in the plugin itself.
+
+[0.1.12](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.11...v0.1.12)
+
 ## 0.1.11
 
 - Show sign-in and API-key errors in the app's language. The sign-in page, the

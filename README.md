@@ -59,13 +59,19 @@ npm ci --ignore-scripts
 npm test
 # 同一功能用例入口：
 npm run test:cases
+# 真实宿主契约用例（DSH_HOST_ROOT 指向 staged 宿主的 dsh-plugin-desktop 目录）：
+DSH_HOST_ROOT=.../.build/desktop/dsh-plugin-desktop npm run check:host
 ```
 
 - [功能用例清单](test/test_cases.csv)：逐条列出前置条件、步骤、预期与对应测试。
 - [执行器](test/run-test-cases.mjs)：校验映射并执行；跳过、缺失或失败均不算通过。
-- 测试目录仅保留[用例清单](test/test_cases.csv)和[统一执行器](test/run-test-cases.mjs)。登录、真实凭证跨进程恢复、界面语言、发布与产物的断言均在执行器内实现。
+- 登录、真实凭证跨进程恢复、界面语言、发布与产物的断言都在[统一执行器](test/run-test-cases.mjs)内实现；只有需要真实宿主的 `host-contract` 用例另放一个文件（[test/host-contract.test.mjs](test/host-contract.test.mjs)），用例清单仍只有一份。
 
-真实凭证测试使用固定版 `@deepseek-ai/dsh-credentials-local@0.1.5-rc.2` 与 Cordis 4.0.2，模拟两次独立启动，只操作临时目录和假凭证。网络、系统浏览器仍是模拟边界；没有自动重启用户应用，也没有验证真实站点 OAuth 或界面视觉。
+真实凭证测试使用固定版 `@deepseek-ai/dsh-credentials-local@0.1.5-rc.2` 与 Cordis 4.0.2，模拟两次独立启动，只操作临时目录和假凭证。
+
+**真实宿主契约用例**（`npm run check:host`，`LOGIN-HOST-01`…`15`）另起一条线：由已装宿主自带的 launcher 启一个一次性 `$DSH_HOME` profile，真实加载器装载本包，插件用到的每个宿主接口都对真实宿主调一次——凭证服务、web server 与路由围栏、`credentials/reference-updated` 事件、桌面桥的 `openExternal`（宿主自己的 HTTPS 围栏）、整条浏览器登录回环链、准入评估器、插槽契约与真实 `SlotRegistry`。接口与用例的逐条对照、以及被模拟的三处边界（TokensAPI 站点、用户浏览器的最后一步、插槽声明）见[宿主接口清单](docs/host-interfaces.md)。
+
+没有 `DSH_HOST_ROOT` 时这些用例报 `NOT EXECUTED`、**不计通过**：`npm test` 会把它们单独列出但不因此失败，`npm run check:host` 直接以非零退出。宿主升级时跑的就是这套用例。
 
 ## 发布与许可
 

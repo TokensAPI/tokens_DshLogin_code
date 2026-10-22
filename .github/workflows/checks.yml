@@ -19,6 +19,12 @@ jobs:
         # Covers engines: Node 22 (minimum 22.19.0) and Node 24 LTS.
         node: [22.19.0, 24]
     runs-on: ubuntu-latest
+    # A leg with an installed DSH host sets this (repository variable or a
+    # self-hosted runner's environment) and `npm run check` then runs the
+    # LOGIN-HOST-* cases against it for real. A hosted runner has no host, so
+    # they report NOT EXECUTED and are not counted as passed.
+    env:
+      DSH_HOST_ROOT: ${{ vars.DSH_HOST_ROOT }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,3 +35,21 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts --registry=https://registry.npmjs.org/
       - run: npm run check
+      - name: Record real-host contract coverage
+        if: always()
+        run: |
+          if [ -n "${DSH_HOST_ROOT:-}" ]; then
+            echo "### Real-host contract cases ran against \`$DSH_HOST_ROOT\`" >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo '### Real-host contract cases: NOT EXECUTED'
+              echo
+              echo 'This runner has no installed DSH host, so `LOGIN-HOST-01`…`15` did not run'
+              echo 'and were **not** counted as passed (see the NOT EXECUTED block in the'
+              echo 'check log). They run where a host exists:'
+              echo
+              echo '    DSH_HOST_ROOT=<...>/.build/desktop/dsh-plugin-desktop npm run check:host'
+              echo
+              echo 'and in the product build gate (agent-hub T0047).'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

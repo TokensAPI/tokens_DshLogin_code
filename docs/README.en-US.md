@@ -99,17 +99,35 @@ entry.
 ## Tests
 
 The functional inventory is [test/test_cases.csv](../test/test_cases.csv), run by
-[test/run-test-cases.mjs](../test/run-test-cases.mjs). These are the only two test
-files; all assertions and credential child-process helpers live in the runner.
-Missing, skipped or failed
+[test/run-test-cases.mjs](../test/run-test-cases.mjs), which implements every
+assertion and the credential child-process helpers. Missing, skipped or failed
 tests cannot count as passed cases. Tests include Cordis 4.0.2 and the actual
 file credential provider 0.1.5-rc.2 in independent processes using temporary
-directories and fake credentials; browser and network effects are simulated.
-They do not validate live OAuth, the installed Electron application or visual layout.
+directories and fake credentials.
 
 ```bash
 npm run test:cases
 ```
+
+The **real-host contract** cases (`LOGIN-HOST-01`…`15`, in
+[test/host-contract.test.mjs](../test/host-contract.test.mjs)) are the second
+line: an installed host's own launcher boots a throwaway `$DSH_HOME` profile,
+its real loader mounts this package, and every host interface the plugin uses
+is called once against that running host — the credential service, the web
+server and the route fence, the `credentials/reference-updated` fan-out, the
+desktop bridge's `openExternal` behind the host's own HTTPS fence, the whole
+browser sign-in loopback, the plugin-admission evaluator, the slot contract and
+the real `SlotRegistry`. [docs/host-interfaces.md](host-interfaces.md) maps each
+interface to its case and states the three simulated boundaries.
+
+```bash
+DSH_HOST_ROOT=.../.build/desktop/dsh-plugin-desktop npm run check:host
+```
+
+Without `DSH_HOST_ROOT` those cases report `NOT EXECUTED` and are **not counted
+as passed**: `npm test` lists them separately and stays green on what it could
+check, while `check:host` exits non-zero. They do not validate live OAuth, the
+installed Electron application or visual layout.
 
 ## Publishing
 
