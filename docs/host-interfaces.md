@@ -45,6 +45,7 @@ convenience; the gate uses `DSH_HOST_ROOT`).
 | `slots.register({ name, priority }, Component)` | that a lower priority shadows the upstream single-slot default | `LOGIN-HOST-14` for the contract; the component behaviour is covered by `LOGIN-073`…`LOGIN-075` |
 | `ctx.effect(fn, label)` | that the gate is disposed with the fiber | `LOGIN-HOST-15` |
 | Host-provided `react`, `react-dom` | value imports the host resolves at render time, invisible to `tsc` | `LOGIN-HOST-15` |
+| Host-provided `@deepseek-ai/dsh-client-ui-primitives` | that the loader still seeds the name, and that `Button` (`size`, `variant`, `icon`) and `Tag` (`tone`) are still exported — the account page's controls are these components, so the host decides what a secondary button and a tag look like | `LOGIN-HOST-16`; the degradation when they are absent is `LOGIN-084` |
 
 ## What is simulated, and what that leaves uncovered
 
@@ -66,6 +67,16 @@ stood in for, each because it cannot be otherwise:
   the slot to declare it, and declaring it by hand would be a copy of the thing
   under test. So the registration *bodies* stay covered by the client cases,
   and these cases cover the slot names, kinds and scopes.
+- **The shared UI package.** The renderer bundles
+  `@deepseek-ai/dsh-client-ui-primitives` rather than resolving it, and the
+  package's own ESM imports `.module.css` and a dozen third-party packages the
+  staged tree does not carry, so it cannot be produced here. `LOGIN-HOST-16`
+  therefore reads the two host artifacts that decide the question instead: the
+  loader's platform seed table in the shipped web frontend, which is what
+  answers a plugin's `require`, and the package's shipped declarations. In
+  `LOGIN-HOST-15` the module is simply absent, which is deliberate — the mount
+  there exercises the path a host that dropped the package would give the
+  plugin, and the section still mounts.
 
 Known per-host gaps, reported as `NOT EXECUTED` / `PARTIAL` by name rather than
 passed over:

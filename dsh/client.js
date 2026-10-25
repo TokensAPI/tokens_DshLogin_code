@@ -560,98 +560,144 @@ window.__ModuleLoader__.load({
       return close
     }
 
+    /*
+     * The account page's stylesheet.
+     *
+     * The host's own settings sections are CSS-module bundles whose class names
+     * are hashed per package, so not one of them can be borrowed by name. What
+     * is shared instead is the design tokens and the metrics those modules are
+     * built from: the section frame, heading and intro come from
+     * `dsh-client-ui-settings-plugins`, the card, list row, hint and mono value
+     * from `-plugin-inventory` (both 0.2.1-rc.2).
+     *
+     * No colour and no font family is written out below — every one is a
+     * `--dsw-*` / `--ds-*` token, which is the whole of what makes the dark
+     * theme follow the host. The radius scale and the settings-card pair
+     * arrived with DSH 0.2, so each carries its 0.2.1 value as the fallback the
+     * 0.1.5 line reads; lengths are the host's own literals, as its modules
+     * write them.
+     */
+    var ACCOUNT_CSS = [
+      '.tka-section{display:flex;flex-direction:column;gap:14px;width:100%;max-width:760px;color:var(--dsw-alias-label-primary)}',
+      '.tka-heading{margin:0;font-size:18px;font-weight:600;line-height:26px}',
+      '.tka-intro{margin:0;color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:20px}',
+      '.tka-note{margin:0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:20px}',
+      '.tka-note[data-errored=true]{color:var(--dsw-alias-state-error-primary)}',
+      '.tka-expiry{display:flex;flex-direction:column;gap:4px;margin:0}',
+      '.tka-expiryLine{margin:0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}',
+      '.tka-card{display:flex;flex-direction:column;overflow:hidden;border:.5px solid var(--dsw-alias-settings-card-stroke,var(--dsw-alias-border-l2));border-radius:var(--dsw-radius-xl,20px);background:var(--dsw-alias-settings-card-fill,var(--dsw-alias-bg-layer-2))}',
+      '.tka-cardHead{display:flex;align-items:center;gap:12px;min-height:52px;padding:12px 14px}',
+      // A hint belongs to the row above it, so the row gives up its own bottom
+      // padding rather than leaving a gap between the two.
+      '.tka-cardHead:has(+ .tka-hint){padding-bottom:2px}',
+      '.tka-cardMain{display:flex;flex-direction:column;flex:1;gap:2px;min-width:0}',
+      '.tka-cardTitle{font-size:14px;font-weight:500;line-height:20px}',
+      '.tka-cardValue{overflow-wrap:anywhere;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}',
+      '.tka-cardActions{display:flex;flex:none;align-items:center;gap:8px}',
+      '.tka-hint{margin:0;padding:0 14px 12px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}',
+      '.tka-unavailable{margin:0;max-width:300px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;text-align:right}',
+      '.tka-keys{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}',
+      '.tka-keyRow{display:flex;align-items:center;gap:10px;min-height:40px;padding:8px 14px;border-top:.5px solid var(--dsw-alias-border-l2)}',
+      '.tka-keyName{display:flex;flex:0 0 36%;align-items:center;gap:6px;min-width:0;font-size:13px;line-height:20px}',
+      '.tka-keyLabel{text-overflow:ellipsis;white-space:nowrap;overflow:hidden}',
+      '.tka-keyMask{flex:1;min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;color:var(--dsw-alias-label-secondary);font-family:var(--ds-font-family-code);font-size:12px;line-height:18px}',
+      '.tka-keyActions{display:flex;flex:none;align-items:center;gap:6px}',
+      '.tka-keyUse{display:flex;justify-content:flex-end;min-width:56px}',
+      '.tka-state{margin:0;padding:8px 14px;border-top:.5px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px}',
+      '.tka-state[data-errored=true]{color:var(--dsw-alias-state-error-primary)}',
+      '.tka-glyph{display:inline-flex;align-items:center;justify-content:center}',
+      '.tka-glyph[data-tone=done]{color:var(--dsw-alias-state-success-primary)}',
+      // The local stand-ins, should a host ever stop exporting Button or Tag:
+      // the same tokens and the same compact geometry the host primitives ship
+      // (Button.module.css `sm`, Tag.module.css), so the page stays native
+      // rather than falling back to browser chrome.
+      '.tka-button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;height:28px;padding:0 10px;border:0;border-radius:var(--dsw-radius-sm,8px);background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;line-height:18px;cursor:pointer}',
+      '.tka-button[data-variant=outline]{border:.5px solid var(--dsw-alias-border-l3)}',
+      '.tka-button[data-variant=primary]{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}',
+      '.tka-button[data-variant=primary]:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}',
+      '.tka-button[data-variant=ghost]:hover:not(:disabled),.tka-button[data-variant=outline]:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}',
+      '.tka-button:focus-visible{outline:var(--dsw-focus-ring-width,2px) solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}',
+      '.tka-button:disabled{opacity:.4;cursor:not-allowed}',
+      '.tka-tag{display:inline-flex;flex:none;align-items:center;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:500;line-height:17px;white-space:nowrap}',
+      '.tka-tag[data-tone=solid]{background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3)}',
+      '.tka-tag[data-tone=quiet]{color:var(--dsw-alias-label-tertiary)}',
+    ].join('\n')
+
     /**
      * The Settings > 账户管理 page. Plain react.createElement (no JSX, no build
-     * step) in the same house style as the model-manager section: one account
-     * row and one API-key row, both driven by /tokens/login.
+     * step): one account card and one API-key card, both driven by
+     * /tokens/login.
+     *
+     * @param react - the host's React.
+     * @param ui - the host's `@deepseek-ai/dsh-client-ui-primitives`, or
+     *   undefined. Its Button and Tag are the page's controls, so a host-side
+     *   change of what a secondary button or a tag looks like reaches this page
+     *   too. Should a later host stop exporting one of them, the local
+     *   stand-ins below keep the page usable — styled from the same tokens —
+     *   rather than taking the section down with an invalid element type
+     *   (agent-hub T0029).
      */
-    function AccountSection(react) {
+    function AccountSection(react, ui) {
       var h = react.createElement
-      var row = (title, value, controls, hint) =>
-        h(
-          'div',
-          {
-            style: {
-              border: '1px solid var(--dsw-alias-border-l2, #ddd)',
-              borderRadius: 12,
-              padding: 16,
-              marginBottom: 16,
-            },
-          },
-          h('div', { style: { fontSize: 14, fontWeight: 600, marginBottom: value ? 6 : 10 } }, title),
-          value ? h('div', { style: { color: 'var(--dsw-alias-label-secondary, #666)', marginBottom: 12 } }, value) : null,
-          controls,
-          hint
-            ? h(
-                'div',
-                { style: { marginTop: 10, fontSize: 12, color: 'var(--dsw-alias-label-secondary, #666)' } },
-                hint,
-              )
-            : null,
-        )
-      var action = (label, onClick, disabled, primary) =>
-        h(
-          'button',
-          {
-            type: 'button',
-            disabled: disabled === true,
-            onClick: onClick,
-            style: {
-              padding: '8px 14px',
-              borderRadius: 8,
-              border: primary ? 0 : '1px solid var(--dsw-alias-border-l2, #ddd)',
-              background: primary ? 'var(--dsw-alias-state-business-primary, #2563eb)' : 'transparent',
-              color: primary ? 'var(--dsw-alias-bg-layer-2, #fff)' : 'inherit',
-              font: 'inherit',
-              fontWeight: primary ? 600 : 400,
-              cursor: disabled === true ? 'default' : 'pointer',
-              opacity: disabled === true ? 0.6 : 1,
-            },
-          },
-          label,
-        )
-      // Icon-only buttons: the standard two-squares copy glyph, and a check
-      // for the moment right after a successful copy.
+      // A React element type is a function or (forwardRef, memo) an object;
+      // 0.1.5-rc.2 through 0.2.1-rc.2 ship both shapes across these two.
+      var element = (value) =>
+        value !== null && value !== undefined && (typeof value === 'function' || typeof value === 'object') ? value : null
+      var HostButton = element(ui?.Button)
+      var HostTag = element(ui?.Tag)
+      /**
+       * One compact action. `variant` is the host Button's own: 'primary' for
+       * the single sign-in door, 'outline' for a settled choice, 'ghost' for
+       * the quiet ones. Call sites do not know which button they got.
+       */
+      var action = (label, variant, onClick, disabled) => {
+        var props = { onClick: onClick, disabled: disabled === true }
+        if (HostButton !== null) {
+          props.variant = variant
+          props.size = 'sm'
+          return h(HostButton, props, label)
+        }
+        props.type = 'button'
+        props.className = 'tka-button'
+        props['data-variant'] = variant
+        return h('button', props, label)
+      }
+      // Icon-only actions: the standard two-squares copy glyph, and a check for
+      // the moment right after a successful copy. Hand-drawn at the host's 16px
+      // icon size rather than taken from the primitives icon set, whose export
+      // names are the part of that package that does get renamed.
       var copyGlyph = () =>
         h(
           'svg',
-          { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
           h('rect', { x: 9, y: 9, width: 13, height: 13, rx: 2 }),
           h('path', { d: 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1' }),
         )
       var checkGlyph = () =>
         h(
           'svg',
-          { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
+          { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2.5, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true },
           h('path', { d: 'M20 6 9 17l-5-5' }),
         )
-      var iconAction = (icon, titleText, onClick, disabled, tone) =>
-        h(
-          'button',
-          {
-            type: 'button',
-            title: titleText,
-            'aria-label': titleText,
-            disabled: disabled === true,
-            onClick: onClick,
-            style: {
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 36,
-              height: 36,
-              padding: 0,
-              borderRadius: 8,
-              border: '1px solid var(--dsw-alias-border-l2, #ddd)',
-              background: 'transparent',
-              color: tone || 'inherit',
-              cursor: disabled === true ? 'default' : 'pointer',
-              opacity: disabled === true ? 0.55 : 1,
-              transition: 'background .12s ease',
-            },
-          },
-          icon,
-        )
+      var iconAction = (glyph, titleText, onClick, disabled, tone) => {
+        var props = { onClick: onClick, disabled: disabled === true, title: titleText, 'aria-label': titleText }
+        var icon = h('span', { className: 'tka-glyph', 'data-tone': tone || 'rest' }, glyph)
+        if (HostButton !== null) {
+          props.variant = 'ghost'
+          props.size = 'sm'
+          props.icon = icon
+          return h(HostButton, props)
+        }
+        props.type = 'button'
+        props.className = 'tka-button'
+        props['data-variant'] = 'ghost'
+        return h('button', props, icon)
+      }
+      /** A read-only tag: the host's own, or the same capsule from tokens. */
+      var tag = (label, tone) =>
+        HostTag !== null
+          ? h(HostTag, { tone: tone }, label)
+          : h('span', { className: 'tka-tag', 'data-tone': tone }, label)
       return function TokensAccount() {
         var statePair = react.useState(accountCache.status)
         var notePair = react.useState('')
@@ -829,75 +875,48 @@ window.__ModuleLoader__.load({
         var accountValue = signedIn ? (who ? t.signedIn + ' · ' + who : t.signedIn) : state?.sessionExpired ? t.sessionExpired : t.signedOut
         // The same single door as the gate.
         var accountControls = signedIn
-          ? action(t.signOut, () => run('logout', { action: 'logout' }), busy !== '')
+          ? action(t.signOut, 'outline', () => run('logout', { action: 'logout' }), busy !== '')
           : state?.canSignIn !== true
-            ? h('div', { style: { color: 'var(--dsw-alias-label-secondary, #666)' } }, t.browserUnavailable)
-            : action(busy === 'login' ? t.signingIn : state?.sessionExpired ? t.signInAgain : t.signIn, () => run('login', { action: 'login', locale: chinese() ? 'zh' : 'en' }), busy !== '', true)
+            ? h('p', { className: 'tka-unavailable' }, t.browserUnavailable)
+            : action(
+                busy === 'login' ? t.signingIn : state?.sessionExpired ? t.signInAgain : t.signIn,
+                'primary',
+                () => run('login', { action: 'login', locale: chinese() ? 'zh' : 'en' }),
+                busy !== '',
+              )
 
-        var muted = 'var(--dsw-alias-label-secondary, #666)'
-        var keyRow = (item) => {
-          return h(
-            'div',
-            {
-              key: item.id,
-              style: {
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '8px 0',
-                borderTop: '1px solid var(--dsw-alias-border-l2, #eee)',
-              },
-            },
+        // One compact list row per key, on the host list's metrics: the name
+        // and its state tags, the masked key in the theme's code face, and the
+        // two controls.
+        var keyRow = (item) =>
+          h(
+            'li',
+            { key: item.id, className: 'tka-keyRow' },
             h(
               'div',
-              { style: { flex: '0 0 34%', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-              item.name || '#' + item.id,
-              item.inUse
-                ? h(
-                    'span',
-                    {
-                      style: {
-                        marginLeft: 6,
-                        padding: '1px 6px',
-                        borderRadius: 6,
-                        fontSize: 12,
-                        background: 'var(--dsw-alias-state-business-primary, #2563eb)',
-                        color: 'var(--dsw-alias-bg-layer-2, #fff)',
-                      },
-                    },
-                    t.inUse,
-                  )
-                : null,
-              item.enabled ? null : h('span', { style: { marginLeft: 6, fontSize: 12, color: muted } }, t.keyDisabled),
+              { className: 'tka-keyName' },
+              h('span', { className: 'tka-keyLabel' }, item.name || '#' + item.id),
+              // `solid` is the host's tone for the one row that names the
+              // current selection, which is exactly what 「当前使用」 says.
+              item.inUse ? tag(t.inUse, 'solid') : null,
+              item.enabled ? null : tag(t.keyDisabled, 'quiet'),
             ),
-            h(
-              'code',
-              {
-                style: {
-                  flex: 1,
-                  minWidth: 0,
-                  fontFamily: 'var(--dsw-font-family-mono, monospace)',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                },
-              },
-              item.masked,
-            ),
+            h('code', { className: 'tka-keyMask' }, item.masked),
             h(
               'div',
-              { style: { display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' } },
+              { className: 'tka-keyActions' },
               // Two fixed columns, so the controls line up down the list; the
               // in-use row simply leaves its 「使用」 cell empty.
               copiedPair[0] === item.id
-                ? iconAction(checkGlyph(), t.copied, () => {}, false, 'var(--dsw-alias-state-success-primary, #16a34a)')
+                ? iconAction(checkGlyph(), t.copied, () => {}, false, 'done')
                 : iconAction(copyGlyph(), t.copy, () => copyRow(item), busy !== ''),
               h(
                 'div',
-                { style: { minWidth: 64, display: 'flex', justifyContent: 'flex-end' } },
+                { className: 'tka-keyUse' },
                 item.enabled && !item.inUse
                   ? action(
                       busy === 'useApiKey' && switchTargetPair[0] === item.id ? t.switching : t.use,
+                      'outline',
                       () => {
                         switchTargetPair[1](item.id)
                         run('useApiKey', { action: 'useApiKey', id: item.id })
@@ -908,32 +927,31 @@ window.__ModuleLoader__.load({
               ),
             ),
           )
-        }
 
         var keyList = !signedIn
           ? null
-          : h(
-              'div',
-              { style: { marginTop: 16 } },
+          : [
               keysErrorPair[0]
-                ? h('div', { role: 'alert', style: { color: 'var(--dsw-alias-state-error-primary, #b91c1c)' } }, errorMessage(keysErrorPair[0]))
+                ? h('p', { key: 'error', role: 'alert', className: 'tka-state', 'data-errored': true }, errorMessage(keysErrorPair[0]))
                 : null,
               keysLoadingPair[0]
-                ? h('div', { style: { color: muted } }, t.keysLoading)
+                ? h('p', { key: 'state', className: 'tka-state' }, t.keysLoading)
                 : keysPair[0] === null
                   ? null
                   : keysPair[0].length === 0
-                    ? h('div', { style: { color: muted } }, t.keysEmpty)
-                    : keysPair[0].map(keyRow),
-            )
+                    ? h('p', { key: 'state', className: 'tka-state' }, t.keysEmpty)
+                    : h('ul', { key: 'keys', className: 'tka-keys' }, keysPair[0].map(keyRow)),
+            ]
 
-        // Below the list: the one remaining account-wide action.
-        var refreshBar = signedIn
+        // Beside the section's own title: the one remaining account-wide
+        // action, quieter than anything that changes which key is in use.
+        var refreshControl = signedIn
           ? h(
               'div',
-              { style: { marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--dsw-alias-border-l2, #eee)' } },
+              { className: 'tka-cardActions' },
               action(
                 keysLoadingPair[0] ? t.refreshing : t.refresh,
+                'ghost',
                 () => {
                   // A list refresh and nothing else: the key in use is not
                   // touched — switching keys is what 「使用」 is for.
@@ -948,34 +966,58 @@ window.__ModuleLoader__.load({
 
         return h(
           'div',
-          { style: { maxWidth: 760, padding: '8px 0 32px' } },
-          h('h2', { style: { margin: '0 0 8px' } }, t.title),
-          h('p', { style: { margin: '0 0 20px', color: 'var(--dsw-alias-label-secondary, #666)' } }, t.intro),
-          note
+          { className: 'tka-section' },
+          h('style', null, ACCOUNT_CSS),
+          h('h2', { className: 'tka-heading' }, t.title),
+          h('p', { className: 'tka-intro' }, t.intro),
+          note ? h('p', { role: 'alert', className: 'tka-note', 'data-errored': erroredPair[0] === true }, note) : null,
+          state?.sessionExpired
             ? h(
                 'div',
-                {
-                  role: 'alert',
-                  style: {
-                    marginBottom: 16,
-                    color: erroredPair[0]
-                      ? 'var(--dsw-alias-state-error-primary, #b91c1c)'
-                      : 'var(--dsw-alias-label-secondary, #666)',
-                  },
-                },
-                note,
+                { role: 'alert', className: 'tka-expiry' },
+                h('p', { className: 'tka-expiryLine' }, t.sessionExpiredHint),
+                h('p', { className: 'tka-expiryLine' }, authenticated ? t.keyRetainedHint : t.signInRequiredHint),
               )
             : null,
-          state?.sessionExpired
-            ? h('div', { role: 'alert', style: { marginBottom: 16, lineHeight: 1.6 } },
-                h('div', undefined, t.sessionExpiredHint),
-                h('div', undefined, authenticated ? t.keyRetainedHint : t.signInRequiredHint))
-            : null,
-          row(t.account, accountValue, accountControls, signedIn ? t.signOutHint : ''),
-          row(
-            t.apiKey,
-            signedIn ? null : authenticated ? (state?.apiKeyMasked || '') + ' · ' + t.apiKeyOk : t.apiKeyNone,
-            h('div', undefined, keyList, refreshBar),
+          h(
+            'section',
+            { className: 'tka-card' },
+            h(
+              'div',
+              { className: 'tka-cardHead' },
+              h(
+                'div',
+                { className: 'tka-cardMain' },
+                h('div', { className: 'tka-cardTitle' }, t.account),
+                h('div', { className: 'tka-cardValue' }, accountValue),
+              ),
+              h('div', { className: 'tka-cardActions' }, accountControls),
+            ),
+            signedIn ? h('p', { className: 'tka-hint' }, t.signOutHint) : null,
+          ),
+          h(
+            'section',
+            { className: 'tka-card' },
+            h(
+              'div',
+              { className: 'tka-cardHead' },
+              h(
+                'div',
+                { className: 'tka-cardMain' },
+                h('div', { className: 'tka-cardTitle' }, t.apiKey),
+                // Signed in, the list below is the answer; signed out, the one
+                // line about the stored key is all there is to say.
+                signedIn
+                  ? null
+                  : h(
+                      'div',
+                      { className: 'tka-cardValue' },
+                      authenticated ? (state?.apiKeyMasked || '') + ' · ' + t.apiKeyOk : t.apiKeyNone,
+                    ),
+              ),
+              refreshControl,
+            ),
+            keyList,
           ),
         )
       }
@@ -987,7 +1029,19 @@ window.__ModuleLoader__.load({
       ctx.inject(['slots'], (scope) => {
         try {
           var react = require('react')
-          var Section = AccountSection(react)
+          // The host's shared UI package is a seed word of the client module
+          // loader — `staticModules` in dsh-web-frontend lists it beside react
+          // and cordis on every line from 0.1.5-rc.2 to 0.2.1-rc.2 — so it
+          // resolves without this package depending on it, and no second copy
+          // can reach the page. Required on its own, so that losing it costs
+          // the page its host Button and Tag rather than the whole section.
+          var ui
+          try {
+            ui = require('@deepseek-ai/dsh-client-ui-primitives')
+          } catch (error) {
+            console.error(`[tokens-login] host UI primitives unavailable, falling back to local controls: ${error}`)
+          }
+          var Section = AccountSection(react, ui)
           scope.slots.inject('settings.section', function* () {
             yield scope.slots.register(
               {
@@ -1015,8 +1069,11 @@ window.__ModuleLoader__.load({
 
     // Markup and styles copied from the host's Menu, MenuSurface, Modal and
     // Button primitives and the upstream account menu, under our own class
-    // prefix: a plain-JS plugin must not load host UI packages as modules, so
-    // the --dsw-alias-* tokens are the only thing shared with the host.
+    // prefix: those packages' class names are hashed per package and cannot be
+    // borrowed by name, so the --dsw-alias-* tokens are what is shared here.
+    // (The account page does take the host's Button and Tag themselves; see
+    // `registerAccountSection`. This menu copies the upstream account menu
+    // whole, which is more than any one primitive provides.)
     var LAUNCHER_CSS = [
       '.tkl-root{flex:1;min-width:0;position:relative}',
       '.tkl-trigger{user-select:none;box-sizing:border-box;border-radius:var(--dsw-radius-md);width:100%;height:44px;color:var(--dsw-alias-label-primary);font:inherit;font-size:14px;cursor:pointer;background:0 0;border:0;align-items:center;gap:8px;padding:6px;display:flex}',

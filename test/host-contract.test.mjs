@@ -17,7 +17,7 @@ import { TOKENS_LOGIN } from '../dsh/index.js'
 import { ACCOUNT } from './support/live-host-console.mjs'
 import { forEachHost, hostRoots, liveHostReports, liveValue, SKIP_WITHOUT_LIVE_HOST } from './support/live-host.mjs'
 import { admissionVerdicts, eventShapedLiterals, hasAdmissionEvaluator, hostRuntimeVersion, reportedRequirements, sessionVocabulary } from './support/host-modules.mjs'
-import { hostSlotContract, mountClientOnHostSlots, PLUGIN_SLOTS } from './support/live-slots.mjs'
+import { hostModuleSeed, hostSlotContract, hostUiDeclarations, mountClientOnHostSlots, PLUGIN_SLOTS, PLUGIN_UI_EXPORTS, PLUGIN_UI_PACKAGE } from './support/live-slots.mjs'
 
 const repo = join(fileURLToPath(new URL('.', import.meta.url)), '..')
 const manifest = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'))
@@ -351,7 +351,48 @@ test('the client half mounts on the host own slot service and asks it for nothin
       `${version}: the plugin injected ${mounted.injected.join(', ')}`)
     // A client bundle resolves its dependencies from the host at render time,
     // so a host that stopped shipping one would break only in the browser.
-    assert.deepEqual([...mounted.clientModulesAsked].sort(), ['react', 'react-dom'],
+    assert.deepEqual([...mounted.clientModulesAsked].sort(), [PLUGIN_UI_PACKAGE, 'react', 'react-dom'].sort(),
       `${version}: the client half asked the host for ${mounted.clientModulesAsked.join(', ')}`)
+    // The shared UI package is the one the renderer bundles rather than
+    // resolves, so this harness cannot produce it and the plugin takes the
+    // same path a host that dropped it would give it. That it still mounts, on
+    // the real slot service, is the degradation this page is supposed to have:
+    // losing the host's Button and Tag costs the page its chrome, not the
+    // section (agent-hub T0029). Whether the real host answers that name is
+    // the next case's job.
+    assert.deepEqual(Object.keys(mounted.clientModulesUnresolved), [PLUGIN_UI_PACKAGE],
+      `${version}: unresolved ${Object.keys(mounted.clientModulesUnresolved).join(', ')}`)
+  }
+})
+
+test('the host answers the shared UI package this page renders its controls with', { skip }, async () => {
+  for (const root of hostRoots()) {
+    const version = hostRuntimeVersion(root)
+    // One: the name resolves. `require` inside a client bundle is answered
+    // from the loader's platform seed before any package factory, and the
+    // shipped web frontend is where that table lives — so this is the host's
+    // own statement that a plugin asking for this name will be answered. It is
+    // also why the plugin needs no dependency on the package, and why no
+    // second copy can reach the page.
+    const seed = hostModuleSeed(root)
+    assert.ok(Array.isArray(seed) && seed.length > 0, `${version}: could not read the loader's platform seed`)
+    assert.ok(seed.includes('react'), `${version}: the seed table read back wrong (${seed.join(', ')})`)
+    assert.ok(seed.includes(PLUGIN_UI_PACKAGE),
+      `${version}: the loader no longer seeds ${PLUGIN_UI_PACKAGE}; the account page would lose its controls`)
+
+    // Two: it still exports the components, and still takes the props the page
+    // passes. Additions are compatible, so each is an inclusion check — what
+    // breaks the page is a name or a value disappearing.
+    const declared = hostUiDeclarations(root)
+    assert.ok(typeof declared.index === 'string', `${version}: ${PLUGIN_UI_PACKAGE} ships no declarations`)
+    for (const [name, required] of Object.entries(PLUGIN_UI_EXPORTS)) {
+      assert.match(declared.index, new RegExp(`export \\{[^}]*\\b${name}\\b`, 'u'),
+        `${version}: ${PLUGIN_UI_PACKAGE} no longer exports ${name}`)
+      const member = declared.members[name]
+      assert.ok(typeof member === 'string', `${version}: no declaration for ${name}`)
+      for (const token of required) {
+        assert.ok(member.includes(token), `${version}: ${name} no longer declares ${token}`)
+      }
+    }
   }
 })

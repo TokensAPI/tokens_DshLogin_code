@@ -34,8 +34,81 @@ export const PLUGIN_SLOTS = Object.freeze({
   'settings.launcher': { kind: 'single', scope: 'root' },
 })
 
+/**
+ * The one host package this plugin's client half requires beyond React, and
+ * what it asks of it. The account page's controls are these components, so a
+ * host that stopped answering the name, or stopped exporting one of them, is
+ * the page losing its chrome.
+ */
+export const PLUGIN_UI_PACKAGE = '@deepseek-ai/dsh-client-ui-primitives'
+export const PLUGIN_UI_EXPORTS = Object.freeze({
+  // Button: the compact size and the three variants the page renders.
+  Button: ['size', 'variant', 'icon', "'sm'", "'primary'", "'ghost'", "'outline'"],
+  // Tag: the tone that names a current selection, and the quiet one.
+  Tag: ['tone', "'solid'", "'quiet'"],
+})
+
 function hostRequire(root) {
   return createRequire(join(root, 'package.json'))
+}
+
+/**
+ * The client module loader's platform seed: the specifiers a plugin bundle's
+ * `require` is answered with before any package factory is consulted.
+ *
+ * The renderer bundles these rather than resolving them, so they exist only
+ * inside the shipped web frontend; the seed table is the host's own statement
+ * of which names it will answer, written as one object literal.
+ *
+ * @param root - an installed host root.
+ * @returns the seed specifiers, or undefined when the frontend cannot be read.
+ */
+export function hostModuleSeed(root) {
+  const assets = join(root, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
+  let entries
+  try {
+    entries = readdirSync(assets).filter((name) => name.startsWith('index-') && name.endsWith('.js'))
+  } catch {
+    return undefined
+  }
+  for (const entry of entries) {
+    const source = readFileSync(join(assets, entry), 'utf8')
+    // `staticModules: <fn>()`, whose body is the seed object literal. Read the
+    // literal's keys rather than its values: the values are minified locals.
+    const seeded = /staticModules\s*:\s*([A-Za-z_$][\w$]*)\s*\(\s*\)/u.exec(source)
+    if (seeded === null) continue
+    const table = new RegExp(`function ${seeded[1]}\\(\\)\\{return\\{([^}]*)\\}\\}`, 'u').exec(source)
+    if (table === null) continue
+    return table[1]
+      .split(',')
+      .map((pair) => /^\s*"?([^":]+)"?\s*:/u.exec(pair)?.[1])
+      .filter((name) => typeof name === 'string')
+  }
+  return undefined
+}
+
+/**
+ * What an installed host's shared UI package declares it exports.
+ *
+ * The package ships ESM that imports `.module.css` and third-party packages the
+ * staged tree does not carry — the renderer bundles it — so it cannot be
+ * imported here; its shipped declarations are read instead.
+ *
+ * @param root - an installed host root.
+ * @returns `{ index, members }`: the barrel's text, and each member's own.
+ */
+export function hostUiDeclarations(root) {
+  const types = join(root, 'node_modules', ...PLUGIN_UI_PACKAGE.split('/'), 'lib', 'types')
+  const read = (file) => {
+    try {
+      return readFileSync(join(types, file), 'utf8')
+    } catch {
+      return undefined
+    }
+  }
+  const members = {}
+  for (const name of Object.keys(PLUGIN_UI_EXPORTS)) members[name] = read(`${name}.d.ts`)
+  return { index: read('index.d.ts'), members }
 }
 
 /** A shipped client bundle's path; these packages do not export `lib/` by name. */
@@ -135,12 +208,26 @@ export async function mountClientOnHostSlots(root) {
   // Loaded as the Host loads them: the bundle protocol, not an ESM import.
   // One recorder per bundle, so "what this plugin asks the Host for" is not
   // confused with what the renderer asks for.
-  const track = (into) => (name) => {
+  // The browser gets these from the module loader's own table; here they come
+  // from the host's `node_modules`, which answers for everything except the
+  // pre-bundled UI packages — `dsh-client-ui-primitives` ships ESM that imports
+  // `.module.css` and a dozen third-party packages the staged tree does not
+  // carry, because the renderer bundles it rather than resolving it. A miss is
+  // recorded and rethrown, so the plugin takes the same path it would take on a
+  // host that stopped exporting it, and the case can see that it did.
+  const track = (into, failures) => (name) => {
     into.add(name)
-    return required(name)
+    try {
+      return required(name)
+    } catch (error) {
+      failures.set(name, String(error.message ?? error))
+      throw error
+    }
   }
   const rendererAsked = new Set()
   const clientAsked = new Set()
+  const rendererFailed = new Map()
+  const clientFailed = new Map()
   runInContext(readFileSync(clientBundle(root, '@deepseek-ai/dsh-client-ui-renderer'), 'utf8'), context,
     { filename: '@deepseek-ai/dsh-client-ui-renderer/lib/client.js' })
   runInContext(readFileSync(new URL('../../dsh/client.js', import.meta.url), 'utf8'), context,
@@ -148,7 +235,7 @@ export async function mountClientOnHostSlots(root) {
 
   const { Context } = required('@deepseek-ai/cordis')
   const ctx = new Context()
-  const renderer = bundles.get('@deepseek-ai/dsh-client-ui-renderer')(track(rendererAsked))
+  const renderer = bundles.get('@deepseek-ai/dsh-client-ui-renderer')(track(rendererAsked, rendererFailed))
   await ctx.plugin({ name: 'ui-renderer', inject: renderer.inject, apply: renderer.apply })
 
   const slots = ctx.get('slots')
@@ -173,7 +260,7 @@ export async function mountClientOnHostSlots(root) {
   let mountError
   let fiber
   try {
-    const half = client(track(clientAsked))
+    const half = client(track(clientAsked, clientFailed))
     fiber = ctx.plugin({ name: 'tokens-login-client', inject: half.inject, apply: half.apply })
     await fiber
   } catch (error) {
@@ -187,6 +274,8 @@ export async function mountClientOnHostSlots(root) {
     registered,
     rendererModulesAsked: [...rendererAsked],
     clientModulesAsked: [...clientAsked],
+    clientModulesUnresolved: Object.fromEntries(clientFailed),
+    rendererModulesUnresolved: Object.fromEntries(rendererFailed),
     mountError: mountError === undefined ? undefined : String(mountError.message ?? mountError),
   }
   // The gate installs a MutationObserver; dispose the fiber and let jsdom drain

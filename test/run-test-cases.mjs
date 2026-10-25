@@ -1154,8 +1154,20 @@ function registerCases() {
       return { gate, get reloaded() { return reloaded } }
     }
 
-    function accountView(language, request) {
-      return mount(clientSession(language, request), (gate, react) => gate.AccountSection(react))
+    // The host's shared UI package as the client module loader hands it over.
+    // `@deepseek-ai/dsh-client-ui-primitives` is one of the loader's seed words,
+    // and the account page renders its controls with that package's Button and
+    // Tag; these stand in for them so a tree is assertable without a DOM. That
+    // the installed host really exports both, and really resolves under that
+    // name, is the host-contract case's job.
+    const hostUi = {
+      Button: function Button() { return null },
+      Tag: function Tag() { return null },
+    }
+    const isButton = value => value?.type === 'button' || value?.type === hostUi.Button
+
+    function accountView(language, request, ui = hostUi) {
+      return mount(clientSession(language, request), (gate, react) => gate.AccountSection(react, ui))
     }
 
     // Deterministic hook harness: executes the real component, request promises,
@@ -1202,9 +1214,10 @@ function registerCases() {
       return {
         async flush() { for (let i = 0; i < 8; i++) { render(); await new Promise(resolve => setImmediate(resolve)) } render() },
         text() { return flatten(tree).filter(value => typeof value === 'string').join('\n') },
-        button(label) { return flatten(tree).find(value => value?.type === 'button' && value.children.includes(label)) },
-        buttonByTitle(label) { return flatten(tree).find(value => value?.type === 'button' && value.props.title === label) },
+        button(label) { return flatten(tree).find(value => isButton(value) && value.children.includes(label)) },
+        buttonByTitle(label) { return flatten(tree).find(value => isButton(value) && value.props.title === label) },
         find(predicate) { return flatten(tree).find(value => value && typeof value === 'object' && predicate(value)) },
+        all(predicate) { return flatten(tree).filter(value => value && typeof value === 'object' && predicate(value)) },
         menuItems() {
           return flatten(tree).filter(value => value?.props?.role === 'menuitem')
             .map(item => ({ item, text: flatten(item.children).filter(value => typeof value === 'string').join(' ') }))
@@ -1315,6 +1328,100 @@ function registerCases() {
         assert.equal(view.button('Sign in again').props.disabled, false)
         assert.equal(view.reloaded, false)
       }
+    })
+
+    // The page's appearance, as the two things a render can actually assert:
+    // that nothing is painted outside the host's tokens, and that the controls
+    // are the host's own components. Both are what kept the page looking unlike
+    // every other settings page (agent-hub T0055).
+    const KEY_LIST = [
+      { id: 1, name: 'laptop', masked: 'sk-…1234', enabled: true, inUse: true },
+      { id: 2, name: 'ci', masked: 'sk-…5678', enabled: false },
+    ]
+    const signedInWithKeys = async (_url, init) => {
+      if (init?.method !== 'POST') return clientReply(accountStatus)
+      assert.equal(JSON.parse(init.body).action, 'listApiKeys')
+      return clientReply({ apiKeys: KEY_LIST })
+    }
+    /** Every styling decision the tree carries: its stylesheets and inline styles. */
+    function styling(view) {
+      const sheets = view.all(node => node.type === 'style')
+        .map(node => node.children.filter(child => typeof child === 'string').join('\n'))
+      const inline = view.all(node => node.props?.style !== undefined && node.props.style !== null)
+        .map(node => JSON.stringify(node.props.style))
+      return { sheets, inline, all: sheets.concat(inline).join('\n') }
+    }
+
+    test('the account page paints only through host theme tokens', async () => {
+      const view = accountView('zh-CN', signedInWithKeys)
+      await view.flush()
+      const { sheets, inline, all } = styling(view)
+      assert.equal(sheets.length, 1, 'the page should carry exactly one stylesheet')
+      assert.deepEqual(inline, [], 'no inline style survives: layout belongs in the stylesheet')
+      // A literal colour in any form. `--dsw-*` fallbacks may name another
+      // token, never a value, so both themes stay the host's to decide.
+      for (const literal of all.match(/#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|color)\s*\(/gu) ?? []) {
+        assert.fail(`literal colour ${literal} in the account page styling`)
+      }
+      for (const named of ['white', 'black', 'gray', 'grey', 'red', 'green', 'blue']) {
+        assert.ok(!new RegExp(`:\\s*${named}\\b`, 'u').test(all), `named colour ${named} in the account page styling`)
+      }
+      // Likewise the faces: the masked key takes the theme's code face, and no
+      // rule names a family of its own. `--dsw-font-family-mono` is the trap —
+      // no host line from 0.1.5-rc.2 to 0.2.1-rc.2 defines it, so the rule that
+      // used it was silently falling back to the browser's monospace.
+      const families = sheets.join('\n').match(/font-family:[^;}]*/gu) ?? []
+      assert.deepEqual(families, ['font-family:var(--ds-font-family-code)'])
+      // Every custom property the page reads, so a token renamed upstream is a
+      // red case here and not a grey page in front of the user.
+      const tokens = [...new Set(all.match(/--[\w-]+/gu) ?? [])]
+      assert.ok(tokens.length > 0, 'the page reads no tokens at all')
+      for (const token of tokens) {
+        assert.ok(/^--(?:dsw|ds)-/u.test(token), `${token} is not a host design token`)
+      }
+    })
+
+    test('the account page renders its controls with the host components', async () => {
+      const view = accountView('en-US', signedInWithKeys)
+      await view.flush()
+      // Every control on the page is the host's Button, in its compact size.
+      const buttons = view.all(node => node.type === hostUi.Button)
+      assert.ok(buttons.length >= 3, `expected the sign-out, refresh and per-key controls, saw ${buttons.length}`)
+      assert.ok(!view.find(node => node.type === 'button'), 'a hand-rolled button is left on the page')
+      for (const node of buttons) {
+        assert.equal(node.props.size, 'sm', 'controls on a settings list are the compact size')
+        assert.ok(['primary', 'outline', 'ghost'].includes(node.props.variant), `unknown variant ${node.props.variant}`)
+      }
+      // Sign-out is a settled choice, not the page's primary action; nothing on
+      // a signed-in page competes with the host's own primary buttons.
+      assert.equal(buttons.filter(node => node.props.variant === 'primary').length, 0,
+        'a signed-in account page has no primary action')
+      // 「当前使用」 is the host tag that names a current selection, not a
+      // colour of this plugin's choosing; a disabled key is the quiet tone.
+      const tags = view.all(node => node.type === hostUi.Tag)
+      assert.deepEqual(tags.map(node => node.props.tone), ['solid', 'quiet'])
+      assert.deepEqual(tags.map(node => node.children.join('')), ['In use', 'Disabled'])
+    })
+
+    test('the account page still renders when the host exports no Button or Tag', async () => {
+      // A host that renamed either export would otherwise take the whole
+      // section down with an invalid element type — the shape that broke the
+      // update plugin's sidebar button on 0.6/0.7 (agent-hub T0029). The page
+      // degrades to its own controls, carrying the same tokens.
+      const view = accountView('en-US', signedInWithKeys, {})
+      await view.flush()
+      assert.ok(view.text().includes('In use'), 'the in-use marker survives the fallback')
+      assert.ok(view.button('Refresh list'), 'the refresh control survives the fallback')
+      assert.equal(view.buttonByTitle('Copy').props.className, 'tka-button')
+      const { all } = styling(view)
+      for (const literal of all.match(/#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/gu) ?? []) {
+        assert.fail(`literal colour ${literal} in the fallback styling`)
+      }
+      // And the fallback is a fallback: with the host package present, the page
+      // takes it.
+      const hosted = accountView('en-US', signedInWithKeys)
+      await hosted.flush()
+      assert.equal(hosted.find(node => node.props.className === 'tka-button'), undefined)
     })
 
     test('startup gate explains expiry in the app language without changing admission rules', async () => {
@@ -1452,7 +1559,7 @@ function registerCases() {
         })
         const t = session.gate.launcherLabels()
         const launcher = launcherView(session)
-        const settings = mount(session, (gate, react) => gate.AccountSection(react))
+        const settings = mount(session, (gate, react) => gate.AccountSection(react, hostUi))
         await launcher.flush()
         await settings.flush()
         const trigger = () => launcher.find(node => node.props['aria-label'] === t.menu)
@@ -1597,7 +1704,7 @@ function registerCases() {
           return clientReply({ ...accountStatus, apiKeyError: '自动创建 API Key 失败：最大令牌数量', apiKeyErrorCode: 'upstream',
             user: { username: 'alice' } })
         })
-        const settings = mount(settingsSession, (gate, react) => gate.AccountSection(react))
+        const settings = mount(settingsSession, (gate, react) => gate.AccountSection(react, hostUi))
         await settings.flush()
         settings.button(settingsSession.gate.accountLabels().signIn).props.onClick()
         await settings.flush()
