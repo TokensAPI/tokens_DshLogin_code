@@ -2,6 +2,42 @@
 
 All notable changes to this project are documented in this file.
 
+## 0.1.13
+
+- Align the Account settings page with the host's own settings pages: the page
+  header, the two content blocks and the API key list now follow the host's
+  settings structure — an 18px/600 title with a `label-tertiary` description,
+  cards drawn with the host's `.5px` settings-card stroke and `--dsw-radius-xl`
+  instead of a hand-written 1px border and 16px padding, and 40px key rows
+  separated by the host's own `.5px` divider. **Refresh list** is now a small
+  ghost button in the API key section header.
+- Use the host's own controls: sign out, use, refresh and copy are `Button`
+  from `@deepseek-ai/dsh-client-ui-primitives` (`size=sm`, with `outline` /
+  `ghost` / `primary`), and the in-use and disabled markers are its `Tag`
+  (`solid` / `quiet`) rather than a custom green pill. That package is a
+  platform seed word of the client module loader, so it needs no dependency
+  entry and never loads a second copy; it is required on its own and falls
+  back to a local stand-in built on the same tokens when a host does not
+  export it, so a rename upstream cannot turn the section into an invalid
+  element type.
+- Take every colour and font from the theme variables: the literal `#666`,
+  `#ddd`, `#2563eb` and `#b91c1c` fallbacks are gone, so the dark theme now
+  follows the host with no second set of rules. The masked key's monospace
+  font moved from `--dsw-font-family-mono`, which no host generation defines
+  and which was therefore falling back to the browser default, to the host's
+  own `--ds-font-family-code` — the reason that font did not match the rest of
+  the app.
+- Add `LOGIN-082`, `LOGIN-083` and `LOGIN-084`, which hold the page to
+  theme-token-only colouring, to host components, and to a working degraded
+  path when the host exports neither `Button` nor `Tag`; and `LOGIN-HOST-16`,
+  which checks against a real host that its loader still answers for the
+  package name and that `Button` (`size`, `variant`, `icon`) and `Tag`
+  (`tone`) are still exported.
+- No change to the sign-in, sign-out, key-switching or copy logic; only
+  rendering and styles.
+
+[0.1.13](https://github.com/TokensAPI/tokens_DshLogin_code/compare/v0.1.12...v0.1.13)
+
 ## 0.1.12
 
 - Add the real-host contract cases, `LOGIN-HOST-01`…`LOGIN-HOST-15`, run by
